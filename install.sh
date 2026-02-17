@@ -122,7 +122,9 @@ download_file_with_checksum() {
 
 copy_if_changed() {
     local src="$1" dest="$2"
-    [[ -f "$dest" && cmp -s "$src" "$dest" ]] && { print_message "$GREEN" "No change: $dest"; return; }
+    if [[ -f "$dest" && $(cmp -s "$src" "$dest"; echo $?) -eq 0 ]]; then
+        print_message "$GREEN" "No change: $dest"; return
+    fi
     cp -p "$src" "$dest" && print_message "$YELLOW" "Updated: $dest"
 }
 
