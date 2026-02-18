@@ -246,9 +246,9 @@ if ($isCPanelServer) {
     }
 </style>
 
-<?php 
+<?php
 $img_src = $isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-backup-disk-usage.png';
-echo '<h1><img src="' . $imh_src . '" alt="Disk" style="height:48px;"> Backup Disk Usage</h1>';
+echo '<h1><img src="' . $img_src . '" alt="Disk" style="height:48px;"> Backup Disk Usage</h1>';
 ?>
 
 
@@ -370,4 +370,3 @@ if ($isCPanel) {
 } else {
     echo '</div>';
 }
-
