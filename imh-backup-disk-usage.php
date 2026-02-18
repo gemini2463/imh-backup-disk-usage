@@ -196,7 +196,7 @@ if (!$scan_raw) {
 }
 
 // 5) HTML/UI
-if ($isCPanel) {
+if ($isCPanelServer) {
     require_once('/usr/local/cpanel/php/WHM.php');
     WHM::header('Backup Disk Usage', 0, 0);
 }
@@ -246,7 +246,11 @@ if ($isCPanel) {
     }
 </style>
 
-<h1><img src="imh-backup-disk-usage.png" alt="Disk" style="height:48px;"> Backup Disk Usage</h1>
+<?php 
+$img_src = $isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-backup-disk-usage.png';
+echo '<h1><img src="' . $imh_src . '" alt="Disk" style="height:48px;"> Backup Disk Usage</h1>';
+?>
+
 
 <div class="imh-box">
     <form method="post" class="sort-form">
