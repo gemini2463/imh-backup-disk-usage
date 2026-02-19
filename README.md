@@ -1,4 +1,4 @@
-# Backup Disk Usage (imh-backup-disk-usage), v1.0.0
+# Backup Disk Usage (imh-backup-disk-usage), v1.1.1
 
 WHM/CWP plugin to monitor /backup disk usage (monthly/weekly/daily archives in /backup).
 
@@ -16,9 +16,13 @@ Run as Root: `curl -fsSL https://raw.githubusercontent.com/gemini2463/imh-backup
 # Features
 
 - Sort backups by **size** (largest first) or **date** (newest/oldest)
+- Works with **archive backups** (e.g. `.tar.gz`, `.tgz`, `.zip`, `.tar.*`) and **raw directory backups** (unpacked folders)
+  - Includes CWP raw layout like `/backup/daily/<username>/public_html/`
 - Total /backup usage, per-date, per-type (monthly/weekly/daily)
+- Optional "unpacked size" estimate for archives (uses `tar` / `unzip`, can be slow)
 - Pie charts for top space hogs
-- Cached scans (refresh button)
+- Cached scans + force rescan
+- Avoids deep `/backup` traversal to prevent timeouts on pathological folders
 - WHM/CWP compatible
 
 # Files
