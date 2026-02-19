@@ -70,7 +70,7 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
 // ----------------------------
 // 3) Config
 // ----------------------------
-define('IMH_BDU_VERSION', '1.1.1');
+define('IMH_BDU_VERSION', '1.1.2');
 
 define('BACKUP_CACHE_DIR', '/var/cache/imh-backup-disk-usage');
 @is_dir(BACKUP_CACHE_DIR) || @mkdir(BACKUP_CACHE_DIR, 0700, true);
@@ -176,6 +176,11 @@ function backup_exec_with_timeout($cmd, $timeoutSec)
 {
     $timeoutSec = (int)$timeoutSec;
     if ($timeoutSec <= 0) $timeoutSec = 10;
+
+    // Fix: array cmd → string
+    if (is_array($cmd)) {
+        $cmd = implode(' ', array_map('escapeshellarg', $cmd));
+    }
 
     $descriptors = array(
         0 => array('pipe', 'r'),
