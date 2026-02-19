@@ -668,7 +668,9 @@ if ($imh_isCPanelServer) {
     code { background: #fff; padding: 2px 4px; border: 1px solid #eee; border-radius: 4px; }
 </style>
 
-<h1><img src="imh-backup-disk-usage.png" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage <span class="muted">v<?php echo htmlspecialchars(IMH_BDU_VERSION, ENT_QUOTES, 'UTF-8'); ?></span></h1>
+<?php 
+$img_src = $imh_isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-backup-disk-usage.png'; 
+?><h1><img src="<?php echo htmlspecialchars($img_src); ?>" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage <span class="muted">v<?php echo htmlspecialchars(IMH_BDU_VERSION, ENT_QUOTES, 'UTF-8'); ?></span></h1>
 
 <div class="imh-box">
     <form method="post" class="sort-form">
@@ -681,16 +683,6 @@ if ($imh_isCPanelServer) {
                 </option>
             <?php endforeach; ?>
         </select>
-
-        <label style="margin-left:10px;">
-            <input type="checkbox" name="show_unpacked" value="1" <?php echo $wantUnpacked ? 'checked' : ''; ?> onchange="this.form.submit()">
-            Show unpacked size (slow)
-        </label>
-
-        <label style="margin-left:10px;">
-            <input type="checkbox" name="force_rescan" value="1">
-            Force rescan
-        </label>
 
         <input type="submit" value="Refresh" class="refresh-btn">
     </form>
