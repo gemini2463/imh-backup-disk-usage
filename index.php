@@ -200,7 +200,7 @@ function backup_exec_with_timeout($cmd, $timeoutSec)
     }
 
     $full = $prefix . $cmd;
-    $proc = @proc_open(array('/bin/sh', '-c', $full), $descriptors, $pipes);
+    $proc = @proc_open('/bin/sh -c ' . escapeshellarg($full), $descriptors, $pipes);
     if (!is_resource($proc)) return array('ok' => false, 'stdout' => '', 'stderr' => 'proc_open failed', 'timeout' => false);
 
     @fclose($pipes[0]);
