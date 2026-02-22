@@ -177,7 +177,7 @@ function backup_exec_with_timeout($cmd, $timeoutSec)
     $timeoutSec = (int)$timeoutSec;
     if ($timeoutSec <= 0) $timeoutSec = 10;
 
-    // Fix: array cmd → string
+    // Fix: array cmd -> string
     if (is_array($cmd)) {
         $cmd = implode(' ', array_map('escapeshellarg', $cmd));
     }
@@ -270,13 +270,128 @@ function backup_is_date_dir_name($name)
     );
 }
 
-function backup_get_scan_targets()
+/**
+ * Discover common backup directory paths on the system.
+ * Returns array of existing backup directories.
+ */
+function backup_discover_paths()
 {
-    $targets = array();
+    $candidates = array('/backup', '/newbackup');
+    
+    // Add numbered variants: /backup1-5, /newbackup1-5
+    for ($i = 1; $i <= 5; $i++) {
+        $candidates[] = '/backup' . $i;
+        $candidates[] = '/newbackup' . $i;
+    }
+    
+    $found = array();
+    foreach ($candidates as $path) {
+        if (is_dir($path)) {
+            $found[] = $path;
+        }
+    }
+    
+    return $found;
+}
 
-    // monthly + weekly: /backup/monthly/<date>/accounts/<item>
+/**
+ * Probe the directory structure to determine backup system type.
+ * Returns: 'newbackup', 'backup', or 'unknown'
+ */
+function backup_detect_structure_type($scanRoot)
+{
+    $scanRoot = rtrim((string)$scanRoot, '/');
+    if ($scanRoot === '' || !is_dir($scanRoot)) return 'unknown';
+
+    // Check for newbackup-style: {root}/full/
+    if (is_dir($scanRoot . '/full')) {
+        return 'newbackup';
+    }
+
+    // Check for backup-style indicators: daily/, weekly/, monthly/, or YYYYMMDD dirs
+    $indicators = array(
+        is_dir($scanRoot . '/daily'),
+        is_dir($scanRoot . '/weekly'),
+        is_dir($scanRoot . '/monthly'),
+        count(backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]')) > 0,
+    );
+    foreach ($indicators as $ind) {
+        if ($ind) return 'backup';
+    }
+
+    return 'unknown';
+}
+
+function backup_get_scan_targets($scanRoot = '/backup')
+{
+    $scanRoot = rtrim((string)$scanRoot, '/');
+    if ($scanRoot === '') $scanRoot = '/backup';
+
+    $targets = array();
+    $structureType = backup_detect_structure_type($scanRoot);
+
+    // -------------------------------------------------------
+    // Strategy A: "newbackup" style — {root}/full/{type}/{label}/accounts/*.tar.gz
+    //   e.g. /newbackup/full/daily/Friday/accounts/user.tar.gz
+    //        /newbackup/full/weekly/Friday/accounts/user.tar.gz
+    //        /newbackup/full/manual/accounts/user.tar.gz
+    // -------------------------------------------------------
+    if ($structureType === 'newbackup') {
+        $fullDir = $scanRoot . '/full';
+        foreach (backup_glob_dirs($fullDir . '/*') as $typeDir) {
+            $typeName = basename($typeDir);
+
+            // Normalize type label
+            $type = strtolower($typeName);
+            if (!in_array($type, array('daily', 'weekly', 'monthly', 'manual'), true)) {
+                $type = 'other';
+            }
+
+            // Collect accounts dirs to enumerate individual items within
+            $accountsDirs = array();
+
+            // Check if accounts/ is directly under the type dir (e.g. manual/accounts/)
+            if (is_dir($typeDir . '/accounts')) {
+                $accountsDirs[] = array('label' => $typeName, 'dir' => $typeDir . '/accounts');
+            } else {
+                // Look for label subdirs (e.g. daily/Friday/accounts/)
+                foreach (backup_glob_dirs($typeDir . '/*') as $labelDir) {
+                    $labelName = basename($labelDir);
+                    if (is_dir($labelDir . '/accounts')) {
+                        $accountsDirs[] = array('label' => $typeName . '/' . $labelName, 'dir' => $labelDir . '/accounts');
+                    } else {
+                        // No accounts subdir — scan the label dir itself
+                        $targets[] = array('type' => $type, 'date_dir' => $typeName . '/' . $labelName, 'scan_dir' => $labelDir);
+                    }
+                }
+            }
+
+            // Enumerate individual items (files/dirs) inside each accounts/ dir
+            foreach ($accountsDirs as $ad) {
+                $items = @glob($ad['dir'] . '/*');
+                if (!is_array($items) || empty($items)) {
+                    // Empty accounts dir — show the dir itself
+                    $targets[] = array('type' => $type, 'date_dir' => $ad['label'], 'scan_dir' => $ad['dir']);
+                    continue;
+                }
+                foreach ($items as $item) {
+                    $targets[] = array('type' => $type, 'date_dir' => $ad['label'], 'scan_dir' => $item);
+                }
+            }
+        }
+        return $targets;
+    }
+
+    // -------------------------------------------------------
+    // Strategy B: "backup" style (cPanel/CWP default)
+    //   {root}/{monthly,weekly}/<date>/accounts/
+    //   {root}/YYYYMMDD/accounts/
+    //   {root}/daily/{user|date}/(accounts|raw)
+    // -------------------------------------------------------
+    if ($structureType === 'backup') {
+        // B1: {root}/{monthly,weekly}/<subdir>/accounts/
     foreach (array('monthly', 'weekly') as $t) {
-        $base = '/backup/' . $t;
+        $base = $scanRoot . '/' . $t;
         if (!is_dir($base)) continue;
         foreach (backup_glob_dirs($base . '/*') as $dateDir) {
             $dateKey = basename($dateDir);
@@ -285,17 +400,17 @@ function backup_get_scan_targets()
         }
     }
 
-    // daily: /backup/YYYYMMDD/accounts/<item>
-    foreach (backup_glob_dirs('/backup/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]') as $dateDir) {
+    // B2: {root}/YYYYMMDD/accounts/
+    foreach (backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]') as $dateDir) {
         $dateKey = basename($dateDir);
         $scanDir = is_dir($dateDir . '/accounts') ? ($dateDir . '/accounts') : $dateDir;
         $targets[] = array('type' => 'daily', 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
     }
 
-    // CWP raw backups sometimes live in /backup/daily/<username>/public_html/ (no date folder),
-    // or /backup/daily/<date>/(accounts|raw). Handle both without deep traversal.
-    if (is_dir('/backup/daily')) {
-        $kids = backup_glob_dirs('/backup/daily/*');
+    // B3: {root}/daily/{user or date}/(accounts|raw|files)
+    $dailyDir = $scanRoot . '/daily';
+    if (is_dir($dailyDir)) {
+        $kids = backup_glob_dirs($dailyDir . '/*');
         $dateLike = 0;
         $nonDateLike = 0;
         foreach ($kids as $k) {
@@ -303,31 +418,28 @@ function backup_get_scan_targets()
             if (backup_is_date_dir_name($bn)) $dateLike++;
             else $nonDateLike++;
         }
-
         if ($dateLike > 0 && $dateLike >= $nonDateLike) {
-            // /backup/daily/<date>/...
             foreach ($kids as $dateDir) {
                 $dateKey = basename($dateDir);
                 if (!backup_is_date_dir_name($dateKey)) continue;
-
                 $scanDir = $dateDir;
                 if (is_dir($dateDir . '/accounts')) $scanDir = $dateDir . '/accounts';
                 elseif (is_dir($dateDir . '/raw')) $scanDir = $dateDir . '/raw';
-
                 $targets[] = array('type' => 'daily', 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
             }
         } else {
-            // /backup/daily/<username>/...
             foreach ($kids as $userDir) {
                 $userKey = basename($userDir);
                 $targets[] = array('type' => 'daily', 'date_dir' => $userKey, 'scan_dir' => $userDir);
             }
         }
     }
+        return $targets;
+    }
 
-    // If nothing matched, fall back to /backup itself (shallow)
-    if (empty($targets) && is_dir('/backup')) {
-        $targets[] = array('type' => 'other', 'date_dir' => 'backup', 'scan_dir' => '/backup');
+    // Fallback: scan root directly if no structure recognized
+    if (is_dir($scanRoot)) {
+        $targets[] = array('type' => 'backup', 'date_dir' => 'root', 'scan_dir' => $scanRoot);
     }
 
     return $targets;
@@ -335,37 +447,57 @@ function backup_get_scan_targets()
 
 function backup_list_dir_items($scanDir, $maxItems, $timeoutSec, &$meta)
 {
-    $scanDir = (string)$scanDir;
+    $scanDir = rtrim((string)$scanDir, '/');
     $maxItems = (int)$maxItems;
     if ($maxItems <= 0) $maxItems = 1000;
 
-    // List only direct children; head acts as a hard cap.
-    $cmd = 'find ' . escapeshellarg($scanDir) .
-        ' -mindepth 1 -maxdepth 1 \\( -type f -o -type d \\) ' .
-        " -printf '%y\t%p\t%TY-%Tm-%Td %TH:%TM\t%s\\n' 2>/dev/null | head -n " . (int)$maxItems;
-
+    // Try find first, fallback to ls if busted
+    // List the scan directory itself (fast) — avoids deep scans in /backup layouts.
+    // Note: "newbackup" layouts may pass file targets directly, bypassing this.
+    $cmd = 'find ' . escapeshellarg($scanDir) . 
+        ' -maxdepth 0 -printf "%y\\t%p\\t%TY-%Tm-%Td %TH:%TM\\t%s\\n" 2>/dev/null | head -' . $maxItems;
     $r = backup_exec_with_timeout($cmd, $timeoutSec);
-    if (!empty($r['timeout'])) {
-        $meta['list_timeouts'] = isset($meta['list_timeouts']) ? ((int)$meta['list_timeouts'] + 1) : 1;
-    }
 
-    $stdout = isset($r['stdout']) ? (string)$r['stdout'] : '';
-    $lines = explode("\n", trim($stdout));
     $items = array();
-
-    foreach ($lines as $line) {
-        if ($line === '') continue;
-        $parts = explode("\t", $line, 4);
-        if (count($parts) < 4) continue;
-
-        $items[] = array(
-            'ftype' => (string)$parts[0], // f or d
-            'path'  => (string)$parts[1],
-            'mtime' => (string)$parts[2],
-            'fsize' => (int)$parts[3], // for files; for dirs this is inode size
-        );
+    if (!empty($r['stdout'])) {
+        $lines = explode("\n", trim($r['stdout']));
+        foreach ($lines as $line) {
+            if (trim($line) === '') continue;
+            $parts = explode("\t", $line, 5);
+            if (count($parts) >= 4) {
+                $items[] = array(
+                    'ftype' => $parts[0],
+                    'path' => $parts[1],
+                    'mtime' => isset($parts[2]) ? $parts[2] : '',
+                    'fsize' => (int)end($parts),
+                );
+            }
+        }
     }
 
+    // Fallback ls if find failed/empty
+    if (empty($items)) {
+        $cmd = 'ls -la ' . escapeshellarg($scanDir) . ' 2>/dev/null | head -' . ($maxItems + 5);
+        $r = backup_exec_with_timeout($cmd, $timeoutSec);
+        if (!empty($r['stdout'])) {
+            $lines = explode("\n", trim($r['stdout']));
+            foreach ($lines as $line) {
+                if (preg_match('/^[-d][rwx-]{9}\\s+\\d+\\s+\\w+\\s+\\w+\\s+\\d+\\s+(.+?)\\s+(.+?)\\s+(.+)$/', $line, $m)) {
+                    $items[] = array(
+                        'ftype' => ($m[1] === 'd') ? 'd' : 'f',
+                        'path' => $scanDir . '/' . $m[3],
+                        'mtime' => $m[2],
+                        'fsize' => (int)$m[1],
+                    );
+                    if (count($items) >= $maxItems) break;
+                }
+            }
+        }
+    }
+
+    if (empty($items)) {
+        $meta['list_empty'] = true;
+    }
     return $items;
 }
 
@@ -376,7 +508,7 @@ function backup_get_dir_size_bytes($path, $timeoutSec, &$meta)
     // Prefer bytes; fall back to KiB.
     $cmd1 = 'du -sb --apparent-size -- ' . escapeshellarg($path) . " 2>/dev/null | awk '{print $1}'";
     $r1 = backup_exec_with_timeout($cmd1, $timeoutSec);
-    if (isset($r1['stdout']) && preg_match('/\b(\d+)\b/', (string)$r1['stdout'], $m)) {
+    if (isset($r1['stdout']) && preg_match('/\\b(\\d+)\\b/', (string)$r1['stdout'], $m)) {
         return (int)$m[1];
     }
     if (!empty($r1['timeout'])) {
@@ -386,7 +518,7 @@ function backup_get_dir_size_bytes($path, $timeoutSec, &$meta)
 
     $cmd2 = 'du -sk -- ' . escapeshellarg($path) . " 2>/dev/null | awk '{print $1}'";
     $r2 = backup_exec_with_timeout($cmd2, $timeoutSec);
-    if (isset($r2['stdout']) && preg_match('/\b(\d+)\b/', (string)$r2['stdout'], $m2)) {
+    if (isset($r2['stdout']) && preg_match('/\\b(\\d+)\\b/', (string)$r2['stdout'], $m2)) {
         return (int)$m2[1] * 1024;
     }
     if (!empty($r2['timeout'])) {
@@ -407,6 +539,14 @@ function backup_is_archive_file($path)
         || substr($p, -8) === '.tar.bz2'
         || substr($p, -7) === '.tar.xz'
     );
+}
+
+function backup_format_bytes($bytes) {
+    $bytes = (int)$bytes;
+    if ($bytes >= 1073741824) return round($bytes / 1073741824, 1) . ' GB';
+    if ($bytes >= 1048576) return round($bytes / 1048576, 1) . ' MB';
+    if ($bytes >= 1024) return round($bytes / 1024, 1) . ' KB';
+    return $bytes . ' B';
 }
 
 function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
@@ -430,7 +570,7 @@ function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
         $sum = 0;
         foreach ($lines as $line) {
             // dashed lines mark sections
-            if (preg_match('/^\s*-{5,}\s*$/', $line)) {
+            if (preg_match('/^\\s*-{5,}\\s*$/', $line)) {
                 if (!$in) {
                     $in = true;
                     continue;
@@ -441,7 +581,7 @@ function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
             if (!$in) continue;
 
             // listing lines start with length
-            if (preg_match('/^\s*(\d+)\s+\S+\s+\S+\s+(.+)$/', $line, $m)) {
+            if (preg_match('/^\\s*(\\d+)\\s+\\S+\\s+\\S+\\s+(.+)$/', $line, $m)) {
                 $sum += (int)$m[1];
             }
         }
@@ -456,7 +596,7 @@ function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
             $meta['archive_timeouts'] = isset($meta['archive_timeouts']) ? ((int)$meta['archive_timeouts'] + 1) : 1;
             return null;
         }
-        if (isset($r['stdout']) && preg_match('/\b(\d+)\b/', (string)$r['stdout'], $m)) return (int)$m[1];
+        if (isset($r['stdout']) && preg_match('/\\b(\\d+)\\b/', (string)$r['stdout'], $m)) return (int)$m[1];
         return null;
     }
 
@@ -467,7 +607,7 @@ function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
             $meta['archive_timeouts'] = isset($meta['archive_timeouts']) ? ((int)$meta['archive_timeouts'] + 1) : 1;
             return null;
         }
-        if (isset($r['stdout']) && preg_match('/\b(\d+)\b/', (string)$r['stdout'], $m)) return (int)$m[1];
+        if (isset($r['stdout']) && preg_match('/\\b(\\d+)\\b/', (string)$r['stdout'], $m)) return (int)$m[1];
         return null;
     }
 
@@ -478,7 +618,7 @@ function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
             $meta['archive_timeouts'] = isset($meta['archive_timeouts']) ? ((int)$meta['archive_timeouts'] + 1) : 1;
             return null;
         }
-        if (isset($r['stdout']) && preg_match('/\b(\d+)\b/', (string)$r['stdout'], $m)) return (int)$m[1];
+        if (isset($r['stdout']) && preg_match('/\\b(\\d+)\\b/', (string)$r['stdout'], $m)) return (int)$m[1];
         return null;
     }
 
@@ -489,18 +629,18 @@ function backup_get_archive_unpacked_size_bytes($path, $timeoutSec, &$meta)
             $meta['archive_timeouts'] = isset($meta['archive_timeouts']) ? ((int)$meta['archive_timeouts'] + 1) : 1;
             return null;
         }
-        if (isset($r['stdout']) && preg_match('/\b(\d+)\b/', (string)$r['stdout'], $m)) return (int)$m[1];
+        if (isset($r['stdout']) && preg_match('/\\b(\\d+)\\b/', (string)$r['stdout'], $m)) return (int)$m[1];
         return null;
     }
 
     return null;
 }
 
-function backup_scan($force, $wantUnpacked, $maxItemsPerDate, &$meta)
+function backup_scan($force, $wantUnpacked, $maxItemsPerDate, $scanRoot, &$meta)
 {
     global $IMH_TIMEOUT_LIST, $IMH_TIMEOUT_DU, $IMH_TIMEOUT_ARCHIVE;
     $meta = is_array($meta) ? $meta : array();
-    $targets = backup_get_scan_targets();
+    $targets = backup_get_scan_targets($scanRoot);
 
     $data = array();
     $totals = array(
@@ -509,14 +649,28 @@ function backup_scan($force, $wantUnpacked, $maxItemsPerDate, &$meta)
         'daily' => array(),
         'weekly' => array(),
         'monthly' => array(),
+        'manual' => array(),
         'other' => array(),
     );
 
     foreach ($targets as $t) {
         $scanDir = (string)$t['scan_dir'];
-        if (!is_dir($scanDir)) continue;
 
-        $items = backup_list_dir_items($scanDir, $maxItemsPerDate, $IMH_TIMEOUT_LIST, $meta);
+        // Some layouts (e.g. CWP "newbackup") may hand us individual archive files as targets.
+        // Support both directories (enumerate children) and direct file targets (single item).
+        if (is_file($scanDir)) {
+            $items = array(array(
+                'ftype' => 'f',
+                'path'  => $scanDir,
+                'mtime' => @date('Y-m-d H:i', (int)@filemtime($scanDir)),
+                'fsize' => (int)@filesize($scanDir),
+            ));
+        } elseif (is_dir($scanDir)) {
+            $items = backup_list_dir_items($scanDir, $maxItemsPerDate, $IMH_TIMEOUT_LIST, $meta);
+        } else {
+            continue;
+        }
+
         foreach ($items as $it) {
             $path = (string)$it['path'];
             $ftype = (string)$it['ftype'];
@@ -582,43 +736,114 @@ $sort = 'size_desc';
 if (isset($_POST['sort'])) $sort = (string)$_POST['sort'];
 elseif (isset($_GET['sort'])) $sort = (string)$_GET['sort'];
 
+$type_filter = 'all';
+if (isset($_POST['type_filter'])) $type_filter = (string)$_POST['type_filter'];
+elseif (isset($_GET['type_filter'])) $type_filter = (string)$_GET['type_filter'];
+
 $sorts = array(
-    'size_desc' => 'Size ↓',
-    'size_asc' => 'Size ↑',
-    'date_desc' => 'Date ↓',
-    'date_asc' => 'Date ↑',
+    'size_desc' => 'Largest',
+    'size_asc' => 'Smallest',
+    'date_desc' => 'Newest',
+    'date_asc' => 'Oldest',
 );
 if (!array_key_exists($sort, $sorts)) $sort = 'size_desc';
 
+$type_filters = array(
+    'all' => 'All',
+    'daily' => 'Daily',
+    'weekly' => 'Weekly',
+    'monthly' => 'Monthly',
+    'manual' => 'Manual',
+);
+if (!array_key_exists($type_filter, $type_filters)) $type_filter = 'all';
+
 $wantUnpacked = false;
-if (isset($_POST['show_unpacked']) || isset($_GET['show_unpacked'])) {
-    $wantUnpacked = true;
+
+// ----------------------------
+// 7b) Backup directory input
+// ----------------------------
+function backup_sanitize_scan_root($input)
+{
+    $input = trim((string)$input);
+    if ($input === '') return '/backup';
+
+    // Strip trailing slashes, normalize multiple slashes
+    $input = preg_replace('#/+#', '/', $input);
+    $input = rtrim($input, '/');
+
+    // Ensure leading slash
+    if ($input === '' || $input[0] !== '/') {
+        $input = '/' . $input;
+    }
+
+    // Resolve . and .. to prevent traversal
+    $parts = explode('/', $input);
+    $resolved = array();
+    foreach ($parts as $p) {
+        if ($p === '' || $p === '.') continue;
+        if ($p === '..') {
+            array_pop($resolved);
+            continue;
+        }
+        $resolved[] = $p;
+    }
+    $input = '/' . implode('/', $resolved);
+
+    // Block dangerous directories
+    $blocked = array('/proc', '/sys', '/dev', '/etc', '/boot', '/run', '/sbin', '/bin', '/lib', '/lib64', '/usr');
+    foreach ($blocked as $b) {
+        if ($input === $b || strpos($input, $b . '/') === 0) {
+            return '/backup';
+        }
+    }
+
+    // Must not be root
+    if ($input === '' || $input === '/') {
+        return '/backup';
+    }
+
+    return $input;
 }
 
+$rawScanRoot = '/backup';
+if (isset($_POST['scan_root'])) {
+    $rawScanRoot = (string)$_POST['scan_root'];
+} elseif (isset($_GET['scan_root'])) {
+    $rawScanRoot = (string)$_GET['scan_root'];
+}
+$scanRoot = backup_sanitize_scan_root($rawScanRoot);
+
 $force = false;
-if (isset($_POST['force_rescan']) || isset($_GET['force_rescan'])) {
+if (isset($_POST['do_scan']) || isset($_POST['force_rescan']) || isset($_GET['force_rescan'])) {
     $force = true;
 }
 
-$scan_tag = 'backup_scan_v2_' . ($wantUnpacked ? 'unpacked' : 'disk');
+$scan_tag = 'backup_scan_v2_' . md5($scanRoot);
 
 $meta = array();
-$scan = backup_cached_compute($scan_tag, $IMH_CACHE_TTL_SCAN, $force, function () use ($force, $wantUnpacked, $IMH_MAX_ITEMS_PER_DATE, &$meta) {
+$scan = backup_cached_compute($scan_tag, $IMH_CACHE_TTL_SCAN, $force, function () use ($force, $wantUnpacked, $IMH_MAX_ITEMS_PER_DATE, $scanRoot, &$meta) {
     $metaLocal = array();
-    $res = backup_scan($force, $wantUnpacked, $IMH_MAX_ITEMS_PER_DATE, $metaLocal);
-    // persist meta in the cached object
+    $res = backup_scan($force, $wantUnpacked, $IMH_MAX_ITEMS_PER_DATE, $scanRoot, $metaLocal);
     $res['meta'] = $metaLocal;
     return $res;
 });
 
 if (!is_array($scan) || !isset($scan['data']) || !is_array($scan['data'])) {
-    $data = array(array('error' => 'Scan is running or /backup inaccessible. Try refresh in a moment.'));
-    $totals = array('size' => 0, 'count' => 0, 'daily' => array(), 'weekly' => array(), 'monthly' => array(), 'other' => array());
+    $data = array(array('error' => 'Scan is running or directory inaccessible. Try refresh in a moment.'));
+    $totals = array('size' => 0, 'count' => 0, 'daily' => array(), 'weekly' => array(), 'monthly' => array(), 'manual' => array(), 'other' => array());
     $meta = array();
 } else {
     $data = $scan['data'];
     $totals = isset($scan['totals']) && is_array($scan['totals']) ? $scan['totals'] : array();
     $meta = isset($scan['meta']) && is_array($scan['meta']) ? $scan['meta'] : array();
+
+    // Filter by type
+    if ($type_filter !== 'all') {
+        $data = array_filter($data, function($item) use ($type_filter) {
+            return isset($item['type']) && $item['type'] === $type_filter;
+        });
+        $data = array_values($data); // Re-index
+    }
 
     usort($data, function ($a, $b) use ($sort) {
         switch ($sort) {
@@ -657,47 +882,148 @@ if ($imh_isCPanelServer) {
 
 ?>
 <style>
-    .sys-snap-tables { border-collapse: collapse; width: 100%; margin: 1em 0; background: #fafcff; }
+    .sys-snap-tables { border-collapse: collapse; margin: 1em 0; background: #fafcff; }
     .sys-snap-tables th, .sys-snap-tables td { border: 1px solid #ddd; padding: 8px; text-align: left; }
     .sys-snap-tables th { background: #e6f2ff; font-weight: 600; }
     .imh-box { margin: 1em 0; padding: 1em; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }
     .sort-form select, .refresh-btn { padding: 5px; margin: 5px; }
+.imh-footer-box { margin: 2em 0 1em 0; padding: 1em; border-top: 1px solid #ddd; background: #f8f9fa; border-radius: 0 0 8px 8px; }
+.imh-footer-img { height: 48px; vertical-align: middle; margin-right: 0.5em; }
+
     #BackupPie { height: 400px; width: 100%; }
     .high-usage { background: #ffe5e5 !important; font-weight: bold; }
     .muted { color: #666; font-size: 12px; }
     code { background: #fff; padding: 2px 4px; border: 1px solid #eee; border-radius: 4px; }
+    .backup-path-link { 
+        display: inline-block; 
+        padding: 4px 10px; 
+        margin: 2px 4px; 
+        background: #e8f4f8; 
+        border: 1px solid #90caf9; 
+        border-radius: 4px; 
+        color: #1976d2; 
+        text-decoration: none; 
+        font-family: monospace; 
+        font-size: 13px;
+        transition: all 0.2s;
+    }
+    .backup-path-link:hover { 
+        background: #bbdefb; 
+        border-color: #1976d2; 
+        color: #0d47a1; 
+    }
+    .backup-path-link.active { 
+        background: #1976d2; 
+        color: white; 
+        border-color: #1565c0; 
+        font-weight: bold;
+    }
+    .backup-found-line { 
+        margin: 1em 0; 
+        padding: 0.75em; 
+        background: #f5f5f5; 
+        border-left: 3px solid #1976d2; 
+        border-radius: 4px;
+    }
+.sys-snap-tables tr.odd-num-table-row {
+    background: #f4f4f4;
+}
+.imh-table-alt {
+    background: #f4f4f4;
+}
+.high-load-cell {
+    background-color: #ffe5e5 !important;
+    color: #9c1010 !important;
+    font-weight: bold;
+    outline: 1px solid #ffb8b8;
+}
+.moderate-load-cell {
+    background-color: #ffeaaaff !important;
+    color: #856404 !important;
+    font-weight: bold;
+    outline: 1px solid #ffeeba;
+}
+.very-low-load-cell {
+    background-color: #e6f0ff !important;
+    color: #0a3e8a !important;
+    font-weight: bold;
+    outline: 1px solid #cfe3ff;
+}
+.low-load-cell {
+    background-color: #e6ffea !important;
+    color: #0a6b2e !important;
+    font-weight: bold;
+    outline: 1px solid #b8ffd1;
+}
 </style>
 
-<?php 
-$img_src = $imh_isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-backup-disk-usage.png'; 
-?><h1><img src="<?php echo htmlspecialchars($img_src); ?>" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage <span class="muted">v<?php echo htmlspecialchars(IMH_BDU_VERSION, ENT_QUOTES, 'UTF-8'); ?></span></h1>
+<?php
+$img_src = $imh_isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-backup-disk-usage.png';
+?><h1><img src="<?php echo htmlspecialchars($img_src); ?>" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage</h1>
 
 <div class="imh-box">
-    <form method="post" class="sort-form">
+    <form method="post" style="margin-bottom: 1em;">
         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($CSRF_TOKEN, ENT_QUOTES, 'UTF-8'); ?>">
-        Sort:
-        <select name="sort" onchange="this.form.submit()">
-            <?php foreach ($sorts as $k => $v): ?>
-                <option value="<?php echo htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" <?php echo ($sort === $k) ? 'selected' : ''; ?>>
-                    <?php echo htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-
-        <input type="submit" value="Refresh" class="refresh-btn">
+        <input type="hidden" name="sort" value="<?php echo htmlspecialchars($sort, ENT_QUOTES, 'UTF-8'); ?>">
+        <input type="hidden" name="type_filter" value="<?php echo htmlspecialchars($type_filter, ENT_QUOTES, 'UTF-8'); ?>">
+        <label style="font-weight: 600;">Scan directory:</label>
+        <input type="text" name="scan_root" value="<?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?>"
+               style="padding: 4px 8px; width: 200px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px;">
+        <input type="submit" name="do_scan" value="Scan" style="padding: 4px 12px; margin-left: 4px; cursor: pointer;">
+        <?php if ($scanRoot !== '/backup'): ?>
+            <span class="muted" style="margin-left: 8px;">Scanning: <code><?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?></code></span>
+        <?php endif; ?>
     </form>
 
+    <?php
+    $discoveredPaths = backup_discover_paths();
+    if (!empty($discoveredPaths)):
+        // CWP requires module-style links, otherwise default to relative query
+        $linkPrefix = (isset($imh_isCWPServer) && $imh_isCWPServer) ? 'index.php?module=imh-backup-disk-usage&' : '?';
+    ?>
+        <div class="backup-found-line">
+            <strong>Found:</strong>
+            <?php foreach ($discoveredPaths as $path): ?>
+                <?php if ($path === $scanRoot): ?>
+                    <span class="backup-path-link active" title="Currently viewing <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>
+                    </span>
+                <?php else: ?>
+                    <a href="<?php echo $linkPrefix; ?>scan_root=<?php echo urlencode($path); ?>&amp;sort=<?php echo urlencode($sort); ?>&amp;type_filter=<?php echo urlencode($type_filter); ?>" 
+                       class="backup-path-link"
+                       title="Scan <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>
+                    </a>
+                <?php endif; ?>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+
     <?php if (isset($data[0]['error'])): ?>
-        <div class="imh-box high-usage"><?php echo htmlspecialchars($data[0]['error'], ENT_QUOTES, 'UTF-8'); ?></div>
+        <div class="high-usage"><?php echo htmlspecialchars($data[0]['error'], ENT_QUOTES, 'UTF-8'); ?></div>
     <?php else: ?>
-        <p>
-            <strong>Total:</strong>
-            <?php echo round(((int)$totals['size']) / 1073741824, 1); ?> GB
-            (<?php echo (int)$totals['count']; ?> items)
-            | Daily: <?php echo round(array_sum(isset($totals['daily']) ? $totals['daily'] : array()) / 1e9, 1); ?>GB
-            | Weekly: <?php echo round(array_sum(isset($totals['weekly']) ? $totals['weekly'] : array()) / 1e9, 1); ?>GB
-            | Monthly: <?php echo round(array_sum(isset($totals['monthly']) ? $totals['monthly'] : array()) / 1e9, 1); ?>GB
-        </p>
+        <?php if (isset($totals['count']) && (int)$totals['count'] <= 0): ?>
+            <h2 style="color: #d32f2f; margin: 0.5em 0; font-size: 1.4em;">
+                No <?php echo htmlspecialchars(($type_filter === 'all') ? 'backups' : strtolower($type_filters[$type_filter]) . ' backups', ENT_QUOTES, 'UTF-8'); ?> found in
+                <code><?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?></code>
+            </h2>
+        <?php else: ?>
+            <?php
+            $summaryParts = array();
+            $totalSize = (int)$totals['size'];
+            $summaryParts[] = backup_format_bytes($totalSize) . ' total';
+            foreach (array('daily', 'weekly', 'monthly', 'manual') as $_stype) {
+                $_sum = array_sum(isset($totals[$_stype]) ? $totals[$_stype] : array());
+                if ($_sum > 0) {
+                    $summaryParts[] = backup_format_bytes($_sum) . ' ' . $_stype;
+                }
+            }
+            ?>
+            <h2 style="color: #d32f2f; margin: 0.5em 0; font-size: 1.8em;">
+                <?php echo htmlspecialchars(implode(' | ', $summaryParts), ENT_QUOTES, 'UTF-8'); ?>
+                <span style="font-size: 0.7em; color: #666;">(<?php echo (int)$totals['count']; ?> items)</span>
+            </h2>
+        <?php endif; ?>
         <?php if (!empty($meta)): ?>
             <p class="muted">
                 <?php
@@ -713,127 +1039,101 @@ $img_src = $imh_isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-back
     <?php endif; ?>
 </div>
 
-<?php if (!isset($data[0]['error']) && !empty($data)): ?>
-    <div class="imh-box">
-        <h3>Top Backups (<?php echo count($data); ?>)</h3>
+<div class="imh-box">
+        <?php if (!(isset($data[0]['error']) && $data[0]['error']) && isset($totals['count']) && (int)$totals['count'] > 0): ?>
+        <div style="margin-bottom: 1em;">
+            <form method="post" style="display: inline;">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($CSRF_TOKEN, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="type_filter" value="<?php echo htmlspecialchars($type_filter, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="scan_root" value="<?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?>">
+                Sort:
+                <select name="sort" onchange="this.form.submit()">
+                    <?php foreach ($sorts as $k => $v): ?>
+                        <option value="<?php echo htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" <?php echo ($sort === $k) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </form>
+            <form method="post" style="display: inline; margin-left: 1em;">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($CSRF_TOKEN, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="sort" value="<?php echo htmlspecialchars($sort, ENT_QUOTES, 'UTF-8'); ?>">
+                <input type="hidden" name="scan_root" value="<?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?>">
+                Type:
+                <select name="type_filter" onchange="this.form.submit()">
+                    <?php foreach ($type_filters as $k => $v): ?>
+                        <option value="<?php echo htmlspecialchars($k, ENT_QUOTES, 'UTF-8'); ?>" <?php echo ($type_filter === $k) ? 'selected' : ''; ?>>
+                            <?php echo htmlspecialchars($v, ENT_QUOTES, 'UTF-8'); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </form>
+        </div>
+        <?php endif; ?>
+        <?php if (empty($data) || (isset($data[0]['error']) && $data[0]['error']) || (isset($totals['count']) && (int)$totals['count'] <= 0)): ?>
+            <?php if (isset($data[0]['error']) && $data[0]['error']): ?>
+                <p class="muted"><?php echo htmlspecialchars((string)$data[0]['error'], ENT_QUOTES, 'UTF-8'); ?></p>
+            <?php else: ?>
+                <p class="muted">
+                    No <?php echo htmlspecialchars(($type_filter === 'all') ? 'backups' : strtolower($type_filters[$type_filter]) . ' backups', ENT_QUOTES, 'UTF-8'); ?> found in
+                    <code><?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?></code>.
+                </p>
+            <?php endif; ?>
+        <?php else: ?>
         <table class="sys-snap-tables">
             <thead>
             <tr>
-                <th>Size (GB)</th>
-                <?php if ($wantUnpacked): ?><th>Unpacked (GB)</th><?php endif; ?>
-                <th>Item</th>
-                <th>Date</th>
+                <th>Size</th>
+                <?php if ($wantUnpacked): ?><th>Unpacked</th><?php endif; ?>
+                <th>User</th>
+                <th>Date (EST)</th>
                 <th>Type</th>
-                <th>Method</th>
             </tr>
             </thead>
             <tbody>
+            <?php $row_idx = 0; ?>
             <?php foreach (array_slice($data, 0, 50) as $row): ?>
-                <tr>
-                    <td class="text-right <?php echo (isset($row['size_gb']) && is_float($row['size_gb']) && $row['size_gb'] > 10) ? 'high-usage' : ''; ?>">
-                        <?php
-                        if (!isset($row['size_gb']) || $row['size_gb'] === null) echo '—';
-                        else echo htmlspecialchars((string)$row['size_gb'], ENT_QUOTES, 'UTF-8');
-                        ?>
+                <?php $row_class = ($row_idx % 2 === 1) ? " class='odd-num-table-row'" : ""; ?>
+                <tr<?php echo $row_class; ?>>
+                <?php $row_idx++; ?>
+                    <td class="text-right <?php echo (isset($row['size']) && is_int($row['size']) && $row['size'] > 10*1024*1024*1024) ? 'high-usage' : ''; ?>">
+                        <?php echo htmlspecialchars(backup_format_bytes(isset($row['size']) ? (int)$row['size'] : 0), ENT_QUOTES, 'UTF-8'); ?>
                     </td>
                     <?php if ($wantUnpacked): ?>
                         <td class="text-right">
-                            <?php
-                            if (!isset($row['unpacked_gb']) || $row['unpacked_gb'] === null) echo '—';
-                            else echo htmlspecialchars((string)$row['unpacked_gb'], ENT_QUOTES, 'UTF-8');
-                            ?>
+                            <?php echo htmlspecialchars(backup_format_bytes(isset($row['unpacked']) ? (int)$row['unpacked'] : 0), ENT_QUOTES, 'UTF-8'); ?>
                         </td>
                     <?php endif; ?>
                     <td title="<?php echo htmlspecialchars((string)$row['path'], ENT_QUOTES, 'UTF-8'); ?>">
                         <?php
-                        $label = basename((string)$row['path']);
-                        if (isset($row['ftype']) && $row['ftype'] === 'd') $label .= '/';
-                        echo htmlspecialchars($label, ENT_QUOTES, 'UTF-8');
+                        $u = basename((string)$row['path']);
+                        // For archive-based backups (e.g. /newbackup), hide archive extensions in the User column
+                        $u = preg_replace('/(\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.tar|\.zip)$/i', '', (string)$u);
+                        echo htmlspecialchars((string)$u, ENT_QUOTES, 'UTF-8');
                         ?>
                     </td>
                     <td><?php echo htmlspecialchars((string)$row['date'], ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><?php echo htmlspecialchars((string)$row['type'], ENT_QUOTES, 'UTF-8'); ?> / <?php echo htmlspecialchars((string)$row['date_dir'], ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><?php echo htmlspecialchars((string)$row['size_method'], ENT_QUOTES, 'UTF-8'); ?></td>
+                    <td><?php echo htmlspecialchars((string)$row['type'], ENT_QUOTES, 'UTF-8'); ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
         </table>
-        <p class="muted">Showing top 50 items. Sizes use on-disk size for files (stat) and directory size (du). Entries that time out show as “—”.</p>
+        <p class="muted">
+            <?php if (count($data) >= 50): ?>
+                Showing 50 <?php echo htmlspecialchars($sorts[$sort], ENT_QUOTES, 'UTF-8'); ?>.
+            <?php endif; ?>
+            <span style="display: block;"><?php echo count($data); ?> total backups</span>
+        </p>
+        <?php endif; ?>
     </div>
 
-    <div id="BackupPie"></div>
-    <script src="https://www.gstatic.com/charts/loader.js"></script>
-    <script>
-        google.charts.load('current', {packages: ['corechart']});
-        google.charts.setOnLoadCallback(drawPie);
-        function drawPie() {
-            var rows = [
-                ['Backup', 'GB'],
-                <?php
-                $top10 = array_slice($data, 0, 10);
-                $jsRows = array();
-                foreach ($top10 as $r) {
-                    $name = addslashes(basename((string)$r['path']));
-                    $gb = isset($r['size_gb']) && $r['size_gb'] !== null ? (float)$r['size_gb'] : 0.0;
-                    $jsRows[] = "['{$name}',{$gb}]";
-                }
-                echo implode(",", $jsRows);
-                ?>
-            ];
-            new google.visualization.ChartWrapper({
-                chartType: 'PieChart',
-                dataTable: google.visualization.arrayToDataTable(rows),
-                options: {title: 'Top 10 Backups', sliceVisibilityThreshold: 0},
-                containerId: 'BackupPie'
-            }).draw();
-        }
-    </script>
-
-    <div class="imh-box">
-        <h3>By Type/Date</h3>
-        <table class="sys-snap-tables">
-            <thead>
-            <tr>
-                <th>Type</th>
-                <th>Date Dir</th>
-                <th>Size (GB)</th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php
-            foreach (array('daily', 'weekly', 'monthly', 'other') as $t) {
-                if (!isset($totals[$t]) || !is_array($totals[$t])) continue;
-                foreach ($totals[$t] as $dir => $sz) {
-                    echo '<tr><td>' . htmlspecialchars((string)$t, ENT_QUOTES, 'UTF-8') . '</td><td>' .
-                        htmlspecialchars((string)$dir, ENT_QUOTES, 'UTF-8') . "</td><td class='text-right'>" .
-                        htmlspecialchars((string)round(((int)$sz) / 1e9, 1), ENT_QUOTES, 'UTF-8') . '</td></tr>';
-                }
-            }
-            ?>
-            </tbody>
-        </table>
-    </div>
-
-    <div class="imh-box">
-        <h3>Diagnostics (SSH)</h3>
-        <p class="muted">If you suspect a specific folder is causing timeouts, run this from SSH as root (shows largest first, with per-path timeout):</p>
-        <pre style="white-space:pre-wrap;"><code><?php
-$diag_accounts = "find /backup -maxdepth 4 -type d -name accounts -print0 | \
-  xargs -0 -r -n1 -P\"$(nproc)\" sh -c 'd=\"$1\"; find \"$d\" -mindepth 1 -maxdepth 1 -print0 | \
-    xargs -0 -r -n1 -P2 timeout 12 du -sb --apparent-size -- 2>/dev/null' sh | \
-  sort -nr | head";
-
-$diag_cwp_raw = "find /backup/daily -mindepth 2 -maxdepth 2 -type d -print0 | \
-  xargs -0 -r -n1 -P\"$(nproc)\" timeout 12 du -sb --apparent-size -- 2>/dev/null | \
-  sort -nr | head";
-
-echo htmlspecialchars($diag_accounts . "\n\n# CWP raw (/backup/daily/<user>/<dir>)\n" . $diag_cwp_raw, ENT_QUOTES, 'UTF-8');
-?></code></pre>
-        <p class="muted">Adjust timeouts/parallelism as needed. This plugin intentionally avoids deep <code>find /backup -type f</code> scans.</p>
-    </div>
-<?php endif; ?>
+<div class="imh-footer-box">
+    <img src="<?php echo htmlspecialchars($img_src); ?>" alt="sys-snap" class="imh-footer-img" />
+    <p>Plugin by <a href="https://inmotionhosting.com" target="_blank">InMotion Hosting</a>.</p>
+</div>
 
 <?php
 if ($imh_isCPanelServer && class_exists('WHM')) {
     WHM::footer();
 }
+?>

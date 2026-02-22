@@ -37,4 +37,4 @@ Run as Root: `curl -fsSL https://raw.githubusercontent.com/gemini2463/imh-backup
 
 ## SHA256 Check
 
-`for file in index.php imh-plugins.php imh-backup-disk-usage.conf imh-backup-disk-usage.js imh-backup-disk-usage.php imh-backup-disk-usage.png; do sha256sum \"$file\" > \"$file.sha256\"; done`
+`for file in index.php imh-plugins.php imh-backup-disk-usage.conf imh-backup-disk-usage.js imh-backup-disk-usage.php imh-backup-disk-usage.png; do sha256sum "$file" > "$file.sha256"; done`
