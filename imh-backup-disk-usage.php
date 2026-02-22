@@ -989,7 +989,14 @@ if ($imh_isCPanelServer) {
     .sys-snap-tables th { background: #e6f2ff; font-weight: 600; }
     .imh-box { margin: 1em 0; padding: 1em; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }
     .sort-form select, .refresh-btn { padding: 5px; margin: 5px; }
-.imh-footer-box { margin: 2em 0 1em 0; padding: 1em; border-top: 1px solid #ddd; background: #f8f9fa; border-radius: 0 0 8px 8px; }
+    .imh-footer-box {
+        margin: 2em 0 2em 0;
+        padding: 1em;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        display: block;
+        background: #f9f9f9;
+    }
 .imh-footer-img { height: 48px; vertical-align: middle; margin-right: 0.5em; }
 
     #BackupPie { height: 400px; width: 100%; }
