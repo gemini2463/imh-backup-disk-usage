@@ -1067,7 +1067,7 @@ if ($imh_isCPanelServer) {
 </style>
 
 <?php
-$img_src = $imh_isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-backup-disk-usage.png';
+$img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-backup-disk-usage.png';
 ?><h1><img src="<?php echo htmlspecialchars($img_src); ?>" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage</h1>
 
 <div class="imh-box">
