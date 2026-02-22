@@ -70,7 +70,7 @@ if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') 
 // ----------------------------
 // 3) Config
 // ----------------------------
-define('IMH_BDU_VERSION', '1.1.2');
+define('IMH_BDU_VERSION', '1.2.0');
 
 define('BACKUP_CACHE_DIR', '/var/cache/imh-backup-disk-usage');
 @is_dir(BACKUP_CACHE_DIR) || @mkdir(BACKUP_CACHE_DIR, 0700, true);
@@ -308,6 +308,36 @@ function backup_detect_structure_type($scanRoot)
         return 'newbackup';
     }
 
+    // Check for cPanel/WHM-style: date dirs with accounts/ and system/ subdirs
+    // cPanel daily backups are YYYY-MM-DD dirs directly in root (no "daily" subfolder)
+    $cpanelDateDirs = array_merge(
+        backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+        backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]')
+    );
+    $hasCpanelStructure = false;
+    foreach ($cpanelDateDirs as $dd) {
+        if (is_dir($dd . '/accounts') || is_dir($dd . '/system')) {
+            $hasCpanelStructure = true;
+            break;
+        }
+    }
+    if (!$hasCpanelStructure) {
+        // Also check inside monthly/weekly for accounts/system subdirs
+        foreach (array('monthly', 'weekly') as $_t) {
+            $tBase = $scanRoot . '/' . $_t;
+            if (!is_dir($tBase)) continue;
+            foreach (backup_glob_dirs($tBase . '/*') as $dd) {
+                if (is_dir($dd . '/accounts') || is_dir($dd . '/system')) {
+                    $hasCpanelStructure = true;
+                    break 2;
+                }
+            }
+        }
+    }
+    if ($hasCpanelStructure) {
+        return 'cpanel';
+    }
+
     // Check for backup-style indicators: daily/, weekly/, monthly/, or YYYYMMDD dirs
     $indicators = array(
         is_dir($scanRoot . '/daily'),
@@ -379,6 +409,76 @@ function backup_get_scan_targets($scanRoot = '/backup')
                 }
             }
         }
+        return $targets;
+    }
+
+    // -------------------------------------------------------
+    // Strategy A2: "cpanel" style (WHM backups)
+    //   {root}/{monthly,weekly}/<YYYY-MM-DD>/accounts/*.tar.gz
+    //   {root}/{monthly,weekly}/<YYYY-MM-DD>/system/  (system type)
+    //   {root}/<YYYY-MM-DD>/accounts/*.tar.gz  (daily — no "daily" subfolder)
+    //   {root}/<YYYY-MM-DD>/system/  (system type)
+    // -------------------------------------------------------
+    if ($structureType === 'cpanel') {
+        // Helper: enumerate accounts/*.tar.gz + system/ inside a date dir
+        $cpanelEnumDateDir = function($dateDir, $type) use (&$targets) {
+            $dateKey = basename($dateDir);
+            $foundSomething = false;
+
+            // Accounts: enumerate individual .tar.gz files
+            if (is_dir($dateDir . '/accounts')) {
+                $accItems = @glob($dateDir . '/accounts/*.tar.gz');
+                if (is_array($accItems) && !empty($accItems)) {
+                    foreach ($accItems as $item) {
+                        $targets[] = array('type' => $type, 'date_dir' => $dateKey, 'scan_dir' => $item);
+                    }
+                    $foundSomething = true;
+                } else {
+                    // accounts dir exists but no .tar.gz — scan dir itself
+                    $targets[] = array('type' => $type, 'date_dir' => $dateKey, 'scan_dir' => $dateDir . '/accounts');
+                    $foundSomething = true;
+                }
+            }
+
+            // System: count all contents inside the system/ folder
+            if (is_dir($dateDir . '/system')) {
+                $targets[] = array('type' => 'system', 'date_dir' => $dateKey, 'scan_dir' => $dateDir . '/system');
+                $foundSomething = true;
+            }
+
+            // Fallback: if neither accounts nor system, scan the dir itself
+            if (!$foundSomething) {
+                $targets[] = array('type' => $type, 'date_dir' => $dateKey, 'scan_dir' => $dateDir);
+            }
+        };
+
+        // Monthly and weekly: {root}/{monthly,weekly}/<date>/
+        foreach (array('monthly', 'weekly') as $t) {
+            $base = $scanRoot . '/' . $t;
+            if (!is_dir($base)) continue;
+            foreach (backup_glob_dirs($base . '/*') as $dateDir) {
+                $cpanelEnumDateDir($dateDir, $t);
+            }
+        }
+
+        // Daily: date-named dirs directly under root (no "daily" subfolder)
+        $dailyDirs = array_merge(
+            backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
+            backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]')
+        );
+        $dailyDirs = array_unique($dailyDirs);
+        foreach ($dailyDirs as $dateDir) {
+            $cpanelEnumDateDir($dateDir, 'daily');
+        }
+
+        // Also check for a daily/ subfolder (some cPanel configs use it)
+        $dailySubDir = $scanRoot . '/daily';
+        if (is_dir($dailySubDir)) {
+            foreach (backup_glob_dirs($dailySubDir . '/*') as $dateDir) {
+                $cpanelEnumDateDir($dateDir, 'daily');
+            }
+        }
+
         return $targets;
     }
 
@@ -650,6 +750,7 @@ function backup_scan($force, $wantUnpacked, $maxItemsPerDate, $scanRoot, &$meta)
         'weekly' => array(),
         'monthly' => array(),
         'manual' => array(),
+        'system' => array(),
         'other' => array(),
     );
 
@@ -754,6 +855,7 @@ $type_filters = array(
     'weekly' => 'Weekly',
     'monthly' => 'Monthly',
     'manual' => 'Manual',
+    'system' => 'System',
 );
 if (!array_key_exists($type_filter, $type_filters)) $type_filter = 'all';
 
@@ -1012,7 +1114,7 @@ $img_src = $imh_isCWPServer ? 'design/img/imh-backup-disk-usage.png' : 'imh-back
             $summaryParts = array();
             $totalSize = (int)$totals['size'];
             $summaryParts[] = backup_format_bytes($totalSize) . ' total';
-            foreach (array('daily', 'weekly', 'monthly', 'manual') as $_stype) {
+            foreach (array('daily', 'weekly', 'monthly', 'manual', 'system') as $_stype) {
                 $_sum = array_sum(isset($totals[$_stype]) ? $totals[$_stype] : array());
                 if ($_sum > 0) {
                     $summaryParts[] = backup_format_bytes($_sum) . ' ' . $_stype;

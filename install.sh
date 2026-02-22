@@ -6,7 +6,7 @@ set -eu
 #set -x
 
 # Script metadata
-readonly SCRIPT_VERSION="1.1.2"
+readonly SCRIPT_VERSION="1.2.0"
 readonly SCRIPT_NAME="imh-backup-disk-usage"
 readonly BASE_URL="https://raw.githubusercontent.com/gemini2463/$SCRIPT_NAME/master"
 
