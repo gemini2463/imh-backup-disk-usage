@@ -1090,20 +1090,13 @@ if ($imh_isCPanelServer) {
 $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-backup-disk-usage.png';
 ?><h1><img src="<?php echo htmlspecialchars($img_src); ?>" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage</h1>
 
-<div class="imh-box">
-    <p style="margin: 0;">
-        This tool scans disk usage for <?php echo $imh_isCPanelServer ? 'cPanel' : ($imh_isCWPServer ? 'CWP' : 'server'); ?> backups stored locally.
-        To configure backup schedules and retention, see
-        <?php if ($imh_isCPanelServer): ?>
-            <a href="../scripts/backup_configuration/settings" target="_blank">Backup Configuration</a>.
-        <?php elseif ($imh_isCWPServer): ?>
-            <a href="index.php?module=backups" target="_blank">CWP Backups (Original)</a>
-            or <a href="index.php?module=backup_manager2" target="_blank">CWP Backups (New)</a>.
-        <?php else: ?>
-            your control panel's backup settings.
-        <?php endif; ?>
-    </p>
-</div>
+    <div class="imh-box">
+        <h3>Instructions</h3>
+        <p>This page provides a visual representation of your server's disk usage, specifically highlighting the impact of backup files.</p>
+        <p><strong>Backups by Type:</strong> Shows the total size consumed by each backup type (Daily, Weekly, Monthly, System, Manual). Click on a pie slice to see the breakdown of users contributing to that type.</p>
+        <p><strong>Disk Usage:</strong> Displays the overall disk usage for each disk > 100GB. This helps you visualize how much space is taken by backups ("Daily", "Weekly", etc.) versus other data ("Other") and free space.</p>
+        <p>To manage your backup settings and retention policies, please visit the <a href="../scripts/backup_configuration/settings" target="_blank">Backup Configuration</a> interface.</p>
+    </div>
 
 <div class="imh-box">
     <form method="post" style="margin-bottom: 1em;">
