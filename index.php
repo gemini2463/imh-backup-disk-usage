@@ -1064,11 +1064,46 @@ if ($imh_isCPanelServer) {
     font-weight: bold;
     outline: 1px solid #b8ffd1;
 }
+
+.chart-container {
+  max-height: 500px !important;
+  max-width: 500px !important;
+  display: block;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.imh-charts-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2em;
+}
+
+.imh-charts-grid > div {
+  width: auto;
+  max-width: 500px;
+  margin-left: 0;
+}
 </style>
 
 <?php
 $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-backup-disk-usage.png';
 ?><h1><img src="<?php echo htmlspecialchars($img_src); ?>" alt="Disk" style="height:48px; vertical-align:middle;"> Backup Disk Usage</h1>
+
+<div class="imh-box">
+    <p style="margin: 0;">
+        This tool scans disk usage for <?php echo $imh_isCPanelServer ? 'cPanel' : ($imh_isCWPServer ? 'CWP' : 'server'); ?> backups stored locally.
+        To configure backup schedules and retention, see
+        <?php if ($imh_isCPanelServer): ?>
+            <a href="../scripts/backup_configuration/settings" target="_blank">Backup Configuration</a>.
+        <?php elseif ($imh_isCWPServer): ?>
+            <a href="index.php?module=backups" target="_blank">CWP Backups (Original)</a>
+            or <a href="index.php?module=backup_manager2" target="_blank">CWP Backups (New)</a>.
+        <?php else: ?>
+            your control panel's backup settings.
+        <?php endif; ?>
+    </p>
+</div>
 
 <div class="imh-box">
     <form method="post" style="margin-bottom: 1em;">
@@ -1091,7 +1126,7 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
         $linkPrefix = (isset($imh_isCWPServer) && $imh_isCWPServer) ? 'index.php?module=imh-backup-disk-usage&' : '?';
     ?>
         <div class="backup-found-line">
-            <strong>Found:</strong>
+            <strong>Discovered:</strong>
             <?php foreach ($discoveredPaths as $path): ?>
                 <?php if ($path === $scanRoot): ?>
                     <span class="backup-path-link active" title="Currently viewing <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
@@ -1205,7 +1240,7 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
                 <?php $row_class = ($row_idx % 2 === 1) ? " class='odd-num-table-row'" : ""; ?>
                 <tr<?php echo $row_class; ?>>
                 <?php $row_idx++; ?>
-                    <td class="text-right <?php echo (isset($row['size']) && is_int($row['size']) && $row['size'] > 10*1024*1024*1024) ? 'high-usage' : ''; ?>">
+                    <td class="text-right">
                         <?php echo htmlspecialchars(backup_format_bytes(isset($row['size']) ? (int)$row['size'] : 0), ENT_QUOTES, 'UTF-8'); ?>
                     </td>
                     <?php if ($wantUnpacked): ?>
@@ -1236,12 +1271,175 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
         <?php endif; ?>
     </div>
 
+    <?php
+    // Populate window.backupChartData
+
+    // Helper: format bytes from df (handles K,M,G,T suffixes)
+    function parse_df_bytes($str) {
+        $str = trim((string)$str);
+        $num = (float)substr($str, 0, -1);
+        $suffix = substr($str, -1);
+        switch (strtoupper($suffix)) {
+            case 'T': $num *= 1099511627776; break;
+            case 'G': $num *= 1073741824; break;
+            case 'M': $num *= 1048576; break;
+            case 'K': $num *= 1024; break;
+            default: $num = (float)$str;
+        }
+        return (int)$num;
+    }
+
+    // Get df -h output (using -P for portability). Remove grep to handle filtering in PHP (avoid killing 'ploop').
+    $dfCmd = 'df -hP';
+    $dfRes = backup_exec_with_timeout($dfCmd, 5);
+    $dfLines = explode("\n", trim(isset($dfRes['stdout']) ? $dfRes['stdout'] : ''));
+    $disksRaw = array();
+    foreach ($dfLines as $line) {
+        if (trim($line) === '' || strpos($line, 'Filesystem') !== false) continue;
+        
+        // Limit split to 6 to handle mount points with spaces
+        $parts = preg_split('/\s+/', $line, 6);
+        
+        if (count($parts) >= 6) {
+            $source = $parts[0];
+            $totalStr = $parts[1];
+            $usedStr = $parts[2];
+            $availStr = $parts[3];
+            // $pct = $parts[4];
+            $mount = $parts[5];
+
+            // --- FILTERING ---
+            // 1. Skip tmpfs, udev, etc.
+            if ($source === 'tmpfs' || $source === 'devtmpfs' || $source === 'udev' || $source === 'none') continue;
+            
+            // 2. Skip Docker internal mounts (overlay/shm/etc inside /docker/)
+            if (strpos($mount, '/docker/') !== false || strpos($mount, '/containers/') !== false) continue;
+            
+            // 3. Skip actual /dev/loopX devices (snap loops), but ALLOW ploop/mapper
+            //    Matches /dev/loop0, /dev/loop10, but not /dev/ploop...
+            if (preg_match('|^/dev/loop\d+$|', $source)) continue;
+
+            $total = parse_df_bytes($totalStr);
+            $used = parse_df_bytes($usedStr);
+            $avail = parse_df_bytes($availStr);
+            
+            if ($total > 100 * 1073741824) {  // >100GB
+                $disksRaw[$mount] = array(
+                    'mount' => $mount,
+                    'totalBytes' => $total,
+                    'usedBytes' => $used,
+                    'freeBytes' => $avail,
+                    'typeBreakdown' => array(),
+                );
+            }
+        }
+    }
+
+    // Group backups by type for byType
+    $byType = array(
+        'daily' => array(),
+        'weekly' => array(),
+        'monthly' => array(),
+        'system' => array(),
+        'manual' => array(),
+    );
+    $diskBreakdown = array();  // temp: mount => type => size
+
+    foreach ($data as &$row) {  // Note: & to modify $data for table
+
+        if (!isset($row['type']) || !isset($row['size']) || !is_int($row['size']) || $row['size'] <= 0 || !isset($row['path'])) continue;
+
+        $type = $row['type'];
+        if (!array_key_exists($type, $byType)) $type = 'manual';  // fallback
+
+        // Label: basename without archive extensions
+        $label = basename((string)$row['path']);
+        $label = preg_replace('/(\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.tar|\.zip)$/i', '', $label);
+
+        $byType[$type][] = array(
+            'label' => $label,
+            'sizeBytes' => $row['size'],
+        );
+
+        // Find mount point for this path
+        $path = (string)$row['path'];
+        $mountCmd = 'df -P ' . escapeshellarg($path) . ' 2>/dev/null | tail -1';
+        $mountRes = backup_exec_with_timeout($mountCmd, 2);
+        // df -P output: FS, Blocks, Used, Avail, Cap%, Mount
+        $mountLine = trim(isset($mountRes['stdout']) ? $mountRes['stdout'] : '');
+        $mountParts = preg_split('/\s+/', $mountLine, 6);
+        $mount = (count($mountParts) >= 6) ? $mountParts[5] : '';
+
+        // Disk for table
+        $row['disk'] = $mount;
+
+        if ($mount === '' || !isset($disksRaw[$mount])) continue;
+
+        if (!isset($diskBreakdown[$mount])) $diskBreakdown[$mount] = array();
+        if (!isset($diskBreakdown[$mount][$type])) $diskBreakdown[$mount][$type] = 0;
+        $diskBreakdown[$mount][$type] += $row['size'];
+    }
+
+    // Show all disks > 100GB, regardless of whether they contain backups
+    $disks = array();
+    foreach ($disksRaw as $mount => $disk) {
+        $types = isset($diskBreakdown[$mount]) ? $diskBreakdown[$mount] : array();
+        
+        $breakdown = array();
+        foreach ($types as $t => $s) {
+            $breakdown[] = array('type' => $t, 'sizeBytes' => $s);
+        }
+        $disk['typeBreakdown'] = $breakdown;
+        
+        // Pass original used/free from df (don't overwrite with backup sums)
+        // $disk['freeBytes'] is already set from $disksRaw
+        // $disk['usedBytes'] is already set from $disksRaw
+        
+        $disks[] = $disk;
+    }
+
+    // Sort byType items by size desc
+    foreach ($byType as &$items) {
+        usort($items, function($a, $b) { return $b['sizeBytes'] <=> $a['sizeBytes']; });
+    }
+
+    $chartData = array(
+        'byType' => $byType,
+        'disks' => $disks,
+    );
+    ?>
+
+    <script>
+        window.backupChartData = <?php echo json_encode($chartData); ?>;
+    </script>
+
+    <div class="imh-box">
+      <h3>Backups by Type</h3>
+      <div class="imh-charts-grid" id="BackupTypeCharts"></div>
+    </div>
+    <div class="imh-box">
+      <h3>Disk Usage</h3>
+      <div class="imh-charts-grid" id="DiskUsageCharts"></div>
+    </div>
+
 <div class="imh-footer-box">
     <img src="<?php echo htmlspecialchars($img_src); ?>" alt="sys-snap" class="imh-footer-img" />
     <p>Plugin by <a href="https://inmotionhosting.com" target="_blank">InMotion Hosting</a>.</p>
 </div>
 
+
+
 <?php
+// JavaScript for charts and interactivity
+
+$jsPath = $imh_isCPanelServer ? 'imh-backup-disk-usage.js' : 'design/js/imh-backup-disk-usage.js';
+
+if ($imh_isCPanelServer) {
+    echo '<script type="module" crossorigin src="imh-backup-disk-usage.js"></script>';
+} else {
+    echo '<script type="module" crossorigin src="' . htmlspecialchars($jsPath) . '"></script>';
+}
+
 if ($imh_isCPanelServer && class_exists('WHM')) {
     WHM::footer();
 }
