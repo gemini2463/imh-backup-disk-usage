@@ -2,12 +2,8 @@
 
 WHM/CWP plugin to monitor /backup disk usage (monthly/weekly/daily archives in /backup).
 
-[![Screenshot](screenshot.png)](https://www.youtube.com/watch?v=l6C9AdDgy_I)
-
 - cPanel/WHM path: `/usr/local/cpanel/whostmgr/docroot/cgi/imh-backup-disk-usage/index.php`
 - CWP path: `/usr/local/cwpsrv/htdocs/resources/admin/modules/imh-backup-disk-usage.php`
-
-![Screenshot](screenshot2.png)
 
 # Installation
 
