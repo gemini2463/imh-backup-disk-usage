@@ -7,7 +7,7 @@ set -euo pipefail
 #set -x
 
 # Script metadata
-readonly SCRIPT_VERSION="0.0.1"
+readonly SCRIPT_VERSION="0.1.0"
 readonly SCRIPT_NAME="imh-backup-disk-usage"
 readonly BASE_URL="https://raw.githubusercontent.com/gemini2463/$SCRIPT_NAME/master"
 #readonly BASE_URL="https://repo-ded.inmotionhosting.com/imh-plugins/$SCRIPT_NAME/$SCRIPT_VERSION"
