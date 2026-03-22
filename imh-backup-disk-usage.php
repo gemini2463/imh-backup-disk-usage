@@ -4,7 +4,13 @@
 /**
  * Backup Disk Usage (imh-backup-disk-usage)
  * WHM/CWP plugin: Monitor /backup usage w/ size/date sorting
- * Compatible: WHM /usr/local/cpanel/whostmgr/docroot/cgi/, CWP /usr/local/cwpsrv/htdocs/resources/admin/modules/
+ *
+ * Compatible with:
+ *   - cPanel/WHM: /usr/local/cpanel/whostmgr/docroot/cgi/imh-snap-stat/index.php
+ *   - CWP:       /usr/local/cwpsrv/htdocs/resources/admin/modules/imh-snap-stat.php
+ *
+ * Maintainer: InMotion Hosting
+ * Version: 0.1.0
  *
  * Notes:
  * - PHP 7.1 compatible (no match/arrow functions/nullsafe)
@@ -277,20 +283,20 @@ function backup_is_date_dir_name($name)
 function backup_discover_paths()
 {
     $candidates = array('/backup', '/newbackup');
-    
+
     // Add numbered variants: /backup1-5, /newbackup1-5
     for ($i = 1; $i <= 5; $i++) {
         $candidates[] = '/backup' . $i;
         $candidates[] = '/newbackup' . $i;
     }
-    
+
     $found = array();
     foreach ($candidates as $path) {
         if (is_dir($path)) {
             $found[] = $path;
         }
     }
-    
+
     return $found;
 }
 
@@ -421,7 +427,7 @@ function backup_get_scan_targets($scanRoot = '/backup')
     // -------------------------------------------------------
     if ($structureType === 'cpanel') {
         // Helper: enumerate accounts/*.tar.gz + system/ inside a date dir
-        $cpanelEnumDateDir = function($dateDir, $type) use (&$targets) {
+        $cpanelEnumDateDir = function ($dateDir, $type) use (&$targets) {
             $dateKey = basename($dateDir);
             $foundSomething = false;
 
@@ -490,50 +496,50 @@ function backup_get_scan_targets($scanRoot = '/backup')
     // -------------------------------------------------------
     if ($structureType === 'backup') {
         // B1: {root}/{monthly,weekly}/<subdir>/accounts/
-    foreach (array('monthly', 'weekly') as $t) {
-        $base = $scanRoot . '/' . $t;
-        if (!is_dir($base)) continue;
-        foreach (backup_glob_dirs($base . '/*') as $dateDir) {
+        foreach (array('monthly', 'weekly') as $t) {
+            $base = $scanRoot . '/' . $t;
+            if (!is_dir($base)) continue;
+            foreach (backup_glob_dirs($base . '/*') as $dateDir) {
+                $dateKey = basename($dateDir);
+                $scanDir = is_dir($dateDir . '/accounts') ? ($dateDir . '/accounts') : $dateDir;
+                $targets[] = array('type' => $t, 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
+            }
+        }
+
+        // B2: {root}/YYYYMMDD/accounts/
+        foreach (backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]') as $dateDir) {
             $dateKey = basename($dateDir);
             $scanDir = is_dir($dateDir . '/accounts') ? ($dateDir . '/accounts') : $dateDir;
-            $targets[] = array('type' => $t, 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
+            $targets[] = array('type' => 'daily', 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
         }
-    }
 
-    // B2: {root}/YYYYMMDD/accounts/
-    foreach (backup_glob_dirs($scanRoot . '/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]') as $dateDir) {
-        $dateKey = basename($dateDir);
-        $scanDir = is_dir($dateDir . '/accounts') ? ($dateDir . '/accounts') : $dateDir;
-        $targets[] = array('type' => 'daily', 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
-    }
-
-    // B3: {root}/daily/{user or date}/(accounts|raw|files)
-    $dailyDir = $scanRoot . '/daily';
-    if (is_dir($dailyDir)) {
-        $kids = backup_glob_dirs($dailyDir . '/*');
-        $dateLike = 0;
-        $nonDateLike = 0;
-        foreach ($kids as $k) {
-            $bn = basename($k);
-            if (backup_is_date_dir_name($bn)) $dateLike++;
-            else $nonDateLike++;
-        }
-        if ($dateLike > 0 && $dateLike >= $nonDateLike) {
-            foreach ($kids as $dateDir) {
-                $dateKey = basename($dateDir);
-                if (!backup_is_date_dir_name($dateKey)) continue;
-                $scanDir = $dateDir;
-                if (is_dir($dateDir . '/accounts')) $scanDir = $dateDir . '/accounts';
-                elseif (is_dir($dateDir . '/raw')) $scanDir = $dateDir . '/raw';
-                $targets[] = array('type' => 'daily', 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
+        // B3: {root}/daily/{user or date}/(accounts|raw|files)
+        $dailyDir = $scanRoot . '/daily';
+        if (is_dir($dailyDir)) {
+            $kids = backup_glob_dirs($dailyDir . '/*');
+            $dateLike = 0;
+            $nonDateLike = 0;
+            foreach ($kids as $k) {
+                $bn = basename($k);
+                if (backup_is_date_dir_name($bn)) $dateLike++;
+                else $nonDateLike++;
             }
-        } else {
-            foreach ($kids as $userDir) {
-                $userKey = basename($userDir);
-                $targets[] = array('type' => 'daily', 'date_dir' => $userKey, 'scan_dir' => $userDir);
+            if ($dateLike > 0 && $dateLike >= $nonDateLike) {
+                foreach ($kids as $dateDir) {
+                    $dateKey = basename($dateDir);
+                    if (!backup_is_date_dir_name($dateKey)) continue;
+                    $scanDir = $dateDir;
+                    if (is_dir($dateDir . '/accounts')) $scanDir = $dateDir . '/accounts';
+                    elseif (is_dir($dateDir . '/raw')) $scanDir = $dateDir . '/raw';
+                    $targets[] = array('type' => 'daily', 'date_dir' => $dateKey, 'scan_dir' => $scanDir);
+                }
+            } else {
+                foreach ($kids as $userDir) {
+                    $userKey = basename($userDir);
+                    $targets[] = array('type' => 'daily', 'date_dir' => $userKey, 'scan_dir' => $userDir);
+                }
             }
         }
-    }
         return $targets;
     }
 
@@ -554,7 +560,7 @@ function backup_list_dir_items($scanDir, $maxItems, $timeoutSec, &$meta)
     // Try find first, fallback to ls if busted
     // List the scan directory itself (fast) — avoids deep scans in /backup layouts.
     // Note: "newbackup" layouts may pass file targets directly, bypassing this.
-    $cmd = 'find ' . escapeshellarg($scanDir) . 
+    $cmd = 'find ' . escapeshellarg($scanDir) .
         ' -maxdepth 0 -printf "%y\\t%p\\t%TY-%Tm-%Td %TH:%TM\\t%s\\n" 2>/dev/null | head -' . $maxItems;
     $r = backup_exec_with_timeout($cmd, $timeoutSec);
 
@@ -641,7 +647,8 @@ function backup_is_archive_file($path)
     );
 }
 
-function backup_format_bytes($bytes) {
+function backup_format_bytes($bytes)
+{
     $bytes = (int)$bytes;
     if ($bytes >= 1073741824) return round($bytes / 1073741824, 1) . ' GB';
     if ($bytes >= 1048576) return round($bytes / 1048576, 1) . ' MB';
@@ -941,7 +948,7 @@ if (!is_array($scan) || !isset($scan['data']) || !is_array($scan['data'])) {
 
     // Filter by type
     if ($type_filter !== 'all') {
-        $data = array_filter($data, function($item) use ($type_filter) {
+        $data = array_filter($data, function ($item) use ($type_filter) {
             return isset($item['type']) && $item['type'] === $type_filter;
         });
         $data = array_values($data); // Re-index
@@ -984,11 +991,38 @@ if ($imh_isCPanelServer) {
 
 ?>
 <style>
-    .sys-snap-tables { border-collapse: collapse; margin: 1em 0; background: #fafcff; }
-    .sys-snap-tables th, .sys-snap-tables td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-    .sys-snap-tables th { background: #e6f2ff; font-weight: 600; }
-    .imh-box { margin: 1em 0; padding: 1em; border: 1px solid #ccc; border-radius: 8px; background: #f9f9f9; }
-    .sort-form select, .refresh-btn { padding: 5px; margin: 5px; }
+    .sys-snap-tables {
+        border-collapse: collapse;
+        margin: 1em 0;
+        background: #fafcff;
+    }
+
+    .sys-snap-tables th,
+    .sys-snap-tables td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+    }
+
+    .sys-snap-tables th {
+        background: #e6f2ff;
+        font-weight: 600;
+    }
+
+    .imh-box {
+        margin: 1em 0;
+        padding: 1em;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        background: #f9f9f9;
+    }
+
+    .sort-form select,
+    .refresh-btn {
+        padding: 5px;
+        margin: 5px;
+    }
+
     .imh-footer-box {
         margin: 2em 0 2em 0;
         padding: 1em;
@@ -997,93 +1031,125 @@ if ($imh_isCPanelServer) {
         display: block;
         background: #f9f9f9;
     }
-.imh-footer-img { height: 48px; vertical-align: middle; margin-right: 0.5em; }
 
-    #BackupPie { height: 400px; width: 100%; }
-    .high-usage { background: #ffe5e5 !important; font-weight: bold; }
-    .muted { color: #666; font-size: 12px; }
-    code { background: #fff; padding: 2px 4px; border: 1px solid #eee; border-radius: 4px; }
-    .backup-path-link { 
-        display: inline-block; 
-        padding: 4px 10px; 
-        margin: 2px 4px; 
-        background: #e8f4f8; 
-        border: 1px solid #90caf9; 
-        border-radius: 4px; 
-        color: #1976d2; 
-        text-decoration: none; 
-        font-family: monospace; 
+    .imh-footer-img {
+        height: 48px;
+        vertical-align: middle;
+        margin-right: 0.5em;
+    }
+
+    #BackupPie {
+        height: 400px;
+        width: 100%;
+    }
+
+    .high-usage {
+        background: #ffe5e5 !important;
+        font-weight: bold;
+    }
+
+    .muted {
+        color: #666;
+        font-size: 12px;
+    }
+
+    code {
+        background: #fff;
+        padding: 2px 4px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+    }
+
+    .backup-path-link {
+        display: inline-block;
+        padding: 4px 10px;
+        margin: 2px 4px;
+        background: #e8f4f8;
+        border: 1px solid #90caf9;
+        border-radius: 4px;
+        color: #1976d2;
+        text-decoration: none;
+        font-family: monospace;
         font-size: 13px;
         transition: all 0.2s;
     }
-    .backup-path-link:hover { 
-        background: #bbdefb; 
-        border-color: #1976d2; 
-        color: #0d47a1; 
+
+    .backup-path-link:hover {
+        background: #bbdefb;
+        border-color: #1976d2;
+        color: #0d47a1;
     }
-    .backup-path-link.active { 
-        background: #1976d2; 
-        color: white; 
-        border-color: #1565c0; 
+
+    .backup-path-link.active {
+        background: #1976d2;
+        color: white;
+        border-color: #1565c0;
         font-weight: bold;
     }
-    .backup-found-line { 
-        margin: 1em 0; 
-        padding: 0.75em; 
-        background: #f5f5f5; 
-        border-left: 3px solid #1976d2; 
+
+    .backup-found-line {
+        margin: 1em 0;
+        padding: 0.75em;
+        background: #f5f5f5;
+        border-left: 3px solid #1976d2;
         border-radius: 4px;
     }
-.sys-snap-tables tr.odd-num-table-row {
-    background: #f4f4f4;
-}
-.imh-table-alt {
-    background: #f4f4f4;
-}
-.high-load-cell {
-    background-color: #ffe5e5 !important;
-    color: #9c1010 !important;
-    font-weight: bold;
-    outline: 1px solid #ffb8b8;
-}
-.moderate-load-cell {
-    background-color: #ffeaaaff !important;
-    color: #856404 !important;
-    font-weight: bold;
-    outline: 1px solid #ffeeba;
-}
-.very-low-load-cell {
-    background-color: #e6f0ff !important;
-    color: #0a3e8a !important;
-    font-weight: bold;
-    outline: 1px solid #cfe3ff;
-}
-.low-load-cell {
-    background-color: #e6ffea !important;
-    color: #0a6b2e !important;
-    font-weight: bold;
-    outline: 1px solid #b8ffd1;
-}
 
-.chart-container {
-  max-height: 500px !important;
-  max-width: 500px !important;
-  display: block;
-  margin-left: 0;
-  margin-right: 0;
-}
+    .sys-snap-tables tr.odd-num-table-row {
+        background: #f4f4f4;
+    }
 
-.imh-charts-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 2em;
-}
+    .imh-table-alt {
+        background: #f4f4f4;
+    }
 
-.imh-charts-grid > div {
-  width: auto;
-  max-width: 500px;
-  margin-left: 0;
-}
+    .high-load-cell {
+        background-color: #ffe5e5 !important;
+        color: #9c1010 !important;
+        font-weight: bold;
+        outline: 1px solid #ffb8b8;
+    }
+
+    .moderate-load-cell {
+        background-color: #ffeaaaff !important;
+        color: #856404 !important;
+        font-weight: bold;
+        outline: 1px solid #ffeeba;
+    }
+
+    .very-low-load-cell {
+        background-color: #e6f0ff !important;
+        color: #0a3e8a !important;
+        font-weight: bold;
+        outline: 1px solid #cfe3ff;
+    }
+
+    .low-load-cell {
+        background-color: #e6ffea !important;
+        color: #0a6b2e !important;
+        font-weight: bold;
+        outline: 1px solid #b8ffd1;
+    }
+
+    .chart-container {
+        max-height: 500px !important;
+        max-width: 500px !important;
+        display: block;
+        margin-left: 0;
+        margin-right: 0;
+    }
+
+    .imh-charts-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 2em;
+    }
+
+    .imh-charts-grid>div {
+        width: auto;
+        max-width: 500px;
+        margin-left: 0;
+    }
 </style>
 
 <?php
@@ -1094,15 +1160,15 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
     <p>This tool provides a visual representation of your server's disk usage, specifically highlighting the impact of backup files.</p>
     <p><strong>Backups by Type:</strong> Shows the total size consumed by each backup type.</p>
     <p><strong>Disk Usage:</strong> Displays the overall disk usage for each disk. This helps you visualize how much space is taken by backups ("Daily", "Weekly", etc.) versus other data ("Other") and free space.</p>
-    <p>To manage your backup settings and retention policies, please visit 
-    <?php if ($imh_isCPanelServer): ?>
-        <a href="../../scripts/backup_configuration/settings" target="_blank">Backup Configuration</a>.
-    <?php elseif ($imh_isCWPServer): ?>
-        <a href="index.php?module=backups" target="_blank">CWP Backups (Original)</a> or 
-        <a href="index.php?module=backup_manager2" target="_blank">CWP Backups (New)</a>.
-    <?php else: ?>
-        your control panel's backup settings.
-    <?php endif; ?>
+    <p>To manage your backup settings and retention policies, please visit
+        <?php if ($imh_isCPanelServer): ?>
+            <a href="../../scripts/backup_configuration/settings" target="_blank">Backup Configuration</a>.
+        <?php elseif ($imh_isCWPServer): ?>
+            <a href="index.php?module=backups" target="_blank">CWP Backups (Original)</a> or
+            <a href="index.php?module=backup_manager2" target="_blank">CWP Backups (New)</a>.
+        <?php else: ?>
+            your control panel's backup settings.
+        <?php endif; ?>
     </p>
     <p>Use the InMotion Hosting <a href="https://www.inmotionhosting.com/addons/backup-manager" target="_blank">Backup Manager</a> for automatic, secure, non-local backups.</p>
 </div>
@@ -1114,7 +1180,7 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
         <input type="hidden" name="type_filter" value="<?php echo htmlspecialchars($type_filter, ENT_QUOTES, 'UTF-8'); ?>">
         <label style="font-weight: 600;">Scan directory:</label>
         <input type="text" name="scan_root" value="<?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?>"
-               style="padding: 4px 8px; width: 200px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px;">
+            style="padding: 4px 8px; width: 200px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px;">
         <input type="submit" name="do_scan" value="Scan" style="padding: 4px 12px; margin-left: 4px; cursor: pointer;">
         <?php if ($scanRoot !== '/backup'): ?>
             <span class="muted" style="margin-left: 8px;">Scanning: <code><?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?></code></span>
@@ -1135,9 +1201,9 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
                         <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>
                     </span>
                 <?php else: ?>
-                    <a href="<?php echo $linkPrefix; ?>scan_root=<?php echo urlencode($path); ?>&amp;sort=<?php echo urlencode($sort); ?>&amp;type_filter=<?php echo urlencode($type_filter); ?>" 
-                       class="backup-path-link"
-                       title="Scan <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
+                    <a href="<?php echo $linkPrefix; ?>scan_root=<?php echo urlencode($path); ?>&amp;sort=<?php echo urlencode($sort); ?>&amp;type_filter=<?php echo urlencode($type_filter); ?>"
+                        class="backup-path-link"
+                        title="Scan <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
                         <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>
                     </a>
                 <?php endif; ?>
@@ -1186,7 +1252,7 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
 </div>
 
 <div class="imh-box">
-        <?php if (!(isset($data[0]['error']) && $data[0]['error']) && isset($totals['count']) && (int)$totals['count'] > 0): ?>
+    <?php if (!(isset($data[0]['error']) && $data[0]['error']) && isset($totals['count']) && (int)$totals['count'] > 0): ?>
         <div style="margin-bottom: 1em;">
             <form method="post" style="display: inline;">
                 <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($CSRF_TOKEN, ENT_QUOTES, 'UTF-8'); ?>">
@@ -1215,53 +1281,53 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
                 </select>
             </form>
         </div>
-        <?php endif; ?>
-        <?php if (empty($data) || (isset($data[0]['error']) && $data[0]['error']) || (isset($totals['count']) && (int)$totals['count'] <= 0)): ?>
-            <?php if (isset($data[0]['error']) && $data[0]['error']): ?>
-                <p class="muted"><?php echo htmlspecialchars((string)$data[0]['error'], ENT_QUOTES, 'UTF-8'); ?></p>
-            <?php else: ?>
-                <p class="muted">
-                    No <?php echo htmlspecialchars(($type_filter === 'all') ? 'backups' : strtolower($type_filters[$type_filter]) . ' backups', ENT_QUOTES, 'UTF-8'); ?> found in
-                    <code><?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?></code>.
-                </p>
-            <?php endif; ?>
+    <?php endif; ?>
+    <?php if (empty($data) || (isset($data[0]['error']) && $data[0]['error']) || (isset($totals['count']) && (int)$totals['count'] <= 0)): ?>
+        <?php if (isset($data[0]['error']) && $data[0]['error']): ?>
+            <p class="muted"><?php echo htmlspecialchars((string)$data[0]['error'], ENT_QUOTES, 'UTF-8'); ?></p>
         <?php else: ?>
+            <p class="muted">
+                No <?php echo htmlspecialchars(($type_filter === 'all') ? 'backups' : strtolower($type_filters[$type_filter]) . ' backups', ENT_QUOTES, 'UTF-8'); ?> found in
+                <code><?php echo htmlspecialchars($scanRoot, ENT_QUOTES, 'UTF-8'); ?></code>.
+            </p>
+        <?php endif; ?>
+    <?php else: ?>
         <table class="sys-snap-tables">
             <thead>
-            <tr>
-                <th>Size</th>
-                <?php if ($wantUnpacked): ?><th>Unpacked</th><?php endif; ?>
-                <th>User</th>
-                <th>Date (EST)</th>
-                <th>Type</th>
-            </tr>
+                <tr>
+                    <th>Size</th>
+                    <?php if ($wantUnpacked): ?><th>Unpacked</th><?php endif; ?>
+                    <th>User</th>
+                    <th>Date (EST)</th>
+                    <th>Type</th>
+                </tr>
             </thead>
             <tbody>
-            <?php $row_idx = 0; ?>
-            <?php foreach (array_slice($data, 0, 50) as $row): ?>
-                <?php $row_class = ($row_idx % 2 === 1) ? " class='odd-num-table-row'" : ""; ?>
-                <tr<?php echo $row_class; ?>>
-                <?php $row_idx++; ?>
-                    <td class="text-right">
-                        <?php echo htmlspecialchars(backup_format_bytes(isset($row['size']) ? (int)$row['size'] : 0), ENT_QUOTES, 'UTF-8'); ?>
-                    </td>
-                    <?php if ($wantUnpacked): ?>
+                <?php $row_idx = 0; ?>
+                <?php foreach (array_slice($data, 0, 50) as $row): ?>
+                    <?php $row_class = ($row_idx % 2 === 1) ? " class='odd-num-table-row'" : ""; ?>
+                    <tr<?php echo $row_class; ?>>
+                        <?php $row_idx++; ?>
                         <td class="text-right">
-                            <?php echo htmlspecialchars(backup_format_bytes(isset($row['unpacked']) ? (int)$row['unpacked'] : 0), ENT_QUOTES, 'UTF-8'); ?>
+                            <?php echo htmlspecialchars(backup_format_bytes(isset($row['size']) ? (int)$row['size'] : 0), ENT_QUOTES, 'UTF-8'); ?>
                         </td>
-                    <?php endif; ?>
-                    <td title="<?php echo htmlspecialchars((string)$row['path'], ENT_QUOTES, 'UTF-8'); ?>">
-                        <?php
-                        $u = basename((string)$row['path']);
-                        // For archive-based backups (e.g. /newbackup), hide archive extensions in the User column
-                        $u = preg_replace('/(\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.tar|\.zip)$/i', '', (string)$u);
-                        echo htmlspecialchars((string)$u, ENT_QUOTES, 'UTF-8');
-                        ?>
-                    </td>
-                    <td><?php echo htmlspecialchars((string)$row['date'], ENT_QUOTES, 'UTF-8'); ?></td>
-                    <td><?php echo htmlspecialchars((string)$row['type'], ENT_QUOTES, 'UTF-8'); ?></td>
-                </tr>
-            <?php endforeach; ?>
+                        <?php if ($wantUnpacked): ?>
+                            <td class="text-right">
+                                <?php echo htmlspecialchars(backup_format_bytes(isset($row['unpacked']) ? (int)$row['unpacked'] : 0), ENT_QUOTES, 'UTF-8'); ?>
+                            </td>
+                        <?php endif; ?>
+                        <td title="<?php echo htmlspecialchars((string)$row['path'], ENT_QUOTES, 'UTF-8'); ?>">
+                            <?php
+                            $u = basename((string)$row['path']);
+                            // For archive-based backups (e.g. /newbackup), hide archive extensions in the User column
+                            $u = preg_replace('/(\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.tar|\.zip)$/i', '', (string)$u);
+                            echo htmlspecialchars((string)$u, ENT_QUOTES, 'UTF-8');
+                            ?>
+                        </td>
+                        <td><?php echo htmlspecialchars((string)$row['date'], ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string)$row['type'], ENT_QUOTES, 'UTF-8'); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
             </tbody>
         </table>
         <p class="muted">
@@ -1270,159 +1336,171 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
             <?php endif; ?>
             <span style="display: block;"><?php echo count($data); ?> total backups</span>
         </p>
-        <?php endif; ?>
-    </div>
+    <?php endif; ?>
+</div>
 
-    <?php
-    // Populate window.backupChartData
+<?php
+// Populate window.backupChartData
 
-    // Helper: format bytes from df (handles K,M,G,T suffixes)
-    function parse_df_bytes($str) {
-        $str = trim((string)$str);
-        $num = (float)substr($str, 0, -1);
-        $suffix = substr($str, -1);
-        switch (strtoupper($suffix)) {
-            case 'T': $num *= 1099511627776; break;
-            case 'G': $num *= 1073741824; break;
-            case 'M': $num *= 1048576; break;
-            case 'K': $num *= 1024; break;
-            default: $num = (float)$str;
-        }
-        return (int)$num;
+// Helper: format bytes from df (handles K,M,G,T suffixes)
+function parse_df_bytes($str)
+{
+    $str = trim((string)$str);
+    $num = (float)substr($str, 0, -1);
+    $suffix = substr($str, -1);
+    switch (strtoupper($suffix)) {
+        case 'T':
+            $num *= 1099511627776;
+            break;
+        case 'G':
+            $num *= 1073741824;
+            break;
+        case 'M':
+            $num *= 1048576;
+            break;
+        case 'K':
+            $num *= 1024;
+            break;
+        default:
+            $num = (float)$str;
     }
+    return (int)$num;
+}
 
-    // Get df -h output (using -P for portability). Remove grep to handle filtering in PHP (avoid killing 'ploop').
-    $dfCmd = 'df -hP';
-    $dfRes = backup_exec_with_timeout($dfCmd, 5);
-    $dfLines = explode("\n", trim(isset($dfRes['stdout']) ? $dfRes['stdout'] : ''));
-    $disksRaw = array();
-    foreach ($dfLines as $line) {
-        if (trim($line) === '' || strpos($line, 'Filesystem') !== false) continue;
-        
-        // Limit split to 6 to handle mount points with spaces
-        $parts = preg_split('/\s+/', $line, 6);
-        
-        if (count($parts) >= 6) {
-            $source = $parts[0];
-            $totalStr = $parts[1];
-            $usedStr = $parts[2];
-            $availStr = $parts[3];
-            // $pct = $parts[4];
-            $mount = $parts[5];
+// Get df -h output (using -P for portability). Remove grep to handle filtering in PHP (avoid killing 'ploop').
+$dfCmd = 'df -hP';
+$dfRes = backup_exec_with_timeout($dfCmd, 5);
+$dfLines = explode("\n", trim(isset($dfRes['stdout']) ? $dfRes['stdout'] : ''));
+$disksRaw = array();
+foreach ($dfLines as $line) {
+    if (trim($line) === '' || strpos($line, 'Filesystem') !== false) continue;
 
-            // --- FILTERING ---
-            // 1. Skip tmpfs, udev, etc.
-            if ($source === 'tmpfs' || $source === 'devtmpfs' || $source === 'udev' || $source === 'none') continue;
-            
-            // 2. Skip Docker internal mounts (overlay/shm/etc inside /docker/)
-            if (strpos($mount, '/docker/') !== false || strpos($mount, '/containers/') !== false) continue;
-            
-            // 3. Skip actual /dev/loopX devices (snap loops), but ALLOW ploop/mapper
-            //    Matches /dev/loop0, /dev/loop10, but not /dev/ploop...
-            if (preg_match('|^/dev/loop\d+$|', $source)) continue;
+    // Limit split to 6 to handle mount points with spaces
+    $parts = preg_split('/\s+/', $line, 6);
 
-            $total = parse_df_bytes($totalStr);
-            $used = parse_df_bytes($usedStr);
-            $avail = parse_df_bytes($availStr);
-            
-            if ($total > 100 * 1073741824) {  // >100GB
-                $disksRaw[$mount] = array(
-                    'mount' => $mount,
-                    'totalBytes' => $total,
-                    'usedBytes' => $used,
-                    'freeBytes' => $avail,
-                    'typeBreakdown' => array(),
-                );
-            }
+    if (count($parts) >= 6) {
+        $source = $parts[0];
+        $totalStr = $parts[1];
+        $usedStr = $parts[2];
+        $availStr = $parts[3];
+        // $pct = $parts[4];
+        $mount = $parts[5];
+
+        // --- FILTERING ---
+        // 1. Skip tmpfs, udev, etc.
+        if ($source === 'tmpfs' || $source === 'devtmpfs' || $source === 'udev' || $source === 'none') continue;
+
+        // 2. Skip Docker internal mounts (overlay/shm/etc inside /docker/)
+        if (strpos($mount, '/docker/') !== false || strpos($mount, '/containers/') !== false) continue;
+
+        // 3. Skip actual /dev/loopX devices (snap loops), but ALLOW ploop/mapper
+        //    Matches /dev/loop0, /dev/loop10, but not /dev/ploop...
+        if (preg_match('|^/dev/loop\d+$|', $source)) continue;
+
+        $total = parse_df_bytes($totalStr);
+        $used = parse_df_bytes($usedStr);
+        $avail = parse_df_bytes($availStr);
+
+        if ($total > 100 * 1073741824) {  // >100GB
+            $disksRaw[$mount] = array(
+                'mount' => $mount,
+                'totalBytes' => $total,
+                'usedBytes' => $used,
+                'freeBytes' => $avail,
+                'typeBreakdown' => array(),
+            );
         }
     }
+}
 
-    // Group backups by type for byType
-    $byType = array(
-        'daily' => array(),
-        'weekly' => array(),
-        'monthly' => array(),
-        'system' => array(),
-        'manual' => array(),
+// Group backups by type for byType
+$byType = array(
+    'daily' => array(),
+    'weekly' => array(),
+    'monthly' => array(),
+    'system' => array(),
+    'manual' => array(),
+);
+$diskBreakdown = array();  // temp: mount => type => size
+
+foreach ($data as &$row) {  // Note: & to modify $data for table
+
+    if (!isset($row['type']) || !isset($row['size']) || !is_int($row['size']) || $row['size'] <= 0 || !isset($row['path'])) continue;
+
+    $type = $row['type'];
+    if (!array_key_exists($type, $byType)) $type = 'manual';  // fallback
+
+    // Label: basename without archive extensions
+    $label = basename((string)$row['path']);
+    $label = preg_replace('/(\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.tar|\.zip)$/i', '', $label);
+
+    $byType[$type][] = array(
+        'label' => $label,
+        'sizeBytes' => $row['size'],
     );
-    $diskBreakdown = array();  // temp: mount => type => size
 
-    foreach ($data as &$row) {  // Note: & to modify $data for table
+    // Find mount point for this path
+    $path = (string)$row['path'];
+    $mountCmd = 'df -P ' . escapeshellarg($path) . ' 2>/dev/null | tail -1';
+    $mountRes = backup_exec_with_timeout($mountCmd, 2);
+    // df -P output: FS, Blocks, Used, Avail, Cap%, Mount
+    $mountLine = trim(isset($mountRes['stdout']) ? $mountRes['stdout'] : '');
+    $mountParts = preg_split('/\s+/', $mountLine, 6);
+    $mount = (count($mountParts) >= 6) ? $mountParts[5] : '';
 
-        if (!isset($row['type']) || !isset($row['size']) || !is_int($row['size']) || $row['size'] <= 0 || !isset($row['path'])) continue;
+    // Disk for table
+    $row['disk'] = $mount;
 
-        $type = $row['type'];
-        if (!array_key_exists($type, $byType)) $type = 'manual';  // fallback
+    if ($mount === '' || !isset($disksRaw[$mount])) continue;
 
-        // Label: basename without archive extensions
-        $label = basename((string)$row['path']);
-        $label = preg_replace('/(\.tar\.gz|\.tar\.bz2|\.tar\.xz|\.tgz|\.tar|\.zip)$/i', '', $label);
+    if (!isset($diskBreakdown[$mount])) $diskBreakdown[$mount] = array();
+    if (!isset($diskBreakdown[$mount][$type])) $diskBreakdown[$mount][$type] = 0;
+    $diskBreakdown[$mount][$type] += $row['size'];
+}
 
-        $byType[$type][] = array(
-            'label' => $label,
-            'sizeBytes' => $row['size'],
-        );
+// Show all disks > 100GB, regardless of whether they contain backups
+$disks = array();
+foreach ($disksRaw as $mount => $disk) {
+    $types = isset($diskBreakdown[$mount]) ? $diskBreakdown[$mount] : array();
 
-        // Find mount point for this path
-        $path = (string)$row['path'];
-        $mountCmd = 'df -P ' . escapeshellarg($path) . ' 2>/dev/null | tail -1';
-        $mountRes = backup_exec_with_timeout($mountCmd, 2);
-        // df -P output: FS, Blocks, Used, Avail, Cap%, Mount
-        $mountLine = trim(isset($mountRes['stdout']) ? $mountRes['stdout'] : '');
-        $mountParts = preg_split('/\s+/', $mountLine, 6);
-        $mount = (count($mountParts) >= 6) ? $mountParts[5] : '';
-
-        // Disk for table
-        $row['disk'] = $mount;
-
-        if ($mount === '' || !isset($disksRaw[$mount])) continue;
-
-        if (!isset($diskBreakdown[$mount])) $diskBreakdown[$mount] = array();
-        if (!isset($diskBreakdown[$mount][$type])) $diskBreakdown[$mount][$type] = 0;
-        $diskBreakdown[$mount][$type] += $row['size'];
+    $breakdown = array();
+    foreach ($types as $t => $s) {
+        $breakdown[] = array('type' => $t, 'sizeBytes' => $s);
     }
+    $disk['typeBreakdown'] = $breakdown;
 
-    // Show all disks > 100GB, regardless of whether they contain backups
-    $disks = array();
-    foreach ($disksRaw as $mount => $disk) {
-        $types = isset($diskBreakdown[$mount]) ? $diskBreakdown[$mount] : array();
-        
-        $breakdown = array();
-        foreach ($types as $t => $s) {
-            $breakdown[] = array('type' => $t, 'sizeBytes' => $s);
-        }
-        $disk['typeBreakdown'] = $breakdown;
-        
-        // Pass original used/free from df (don't overwrite with backup sums)
-        // $disk['freeBytes'] is already set from $disksRaw
-        // $disk['usedBytes'] is already set from $disksRaw
-        
-        $disks[] = $disk;
-    }
+    // Pass original used/free from df (don't overwrite with backup sums)
+    // $disk['freeBytes'] is already set from $disksRaw
+    // $disk['usedBytes'] is already set from $disksRaw
 
-    // Sort byType items by size desc
-    foreach ($byType as &$items) {
-        usort($items, function($a, $b) { return $b['sizeBytes'] <=> $a['sizeBytes']; });
-    }
+    $disks[] = $disk;
+}
 
-    $chartData = array(
-        'byType' => $byType,
-        'disks' => $disks,
-    );
-    ?>
+// Sort byType items by size desc
+foreach ($byType as &$items) {
+    usort($items, function ($a, $b) {
+        return $b['sizeBytes'] <=> $a['sizeBytes'];
+    });
+}
 
-    <script>
-        window.backupChartData = <?php echo json_encode($chartData); ?>;
-    </script>
+$chartData = array(
+    'byType' => $byType,
+    'disks' => $disks,
+);
+?>
 
-    <div class="imh-box">
-      <h3>Backups by Type</h3>
-      <div class="imh-charts-grid" id="BackupTypeCharts"></div>
-    </div>
-    <div class="imh-box">
-      <h3>Disk Usage</h3>
-      <div class="imh-charts-grid" id="DiskUsageCharts"></div>
-    </div>
+<script>
+    window.backupChartData = <?php echo json_encode($chartData); ?>;
+</script>
+
+<div class="imh-box">
+    <h3>Backups by Type</h3>
+    <div class="imh-charts-grid" id="BackupTypeCharts"></div>
+</div>
+<div class="imh-box">
+    <h3>Disk Usage</h3>
+    <div class="imh-charts-grid" id="DiskUsageCharts"></div>
+</div>
 
 <div class="imh-footer-box">
     <img src="<?php echo htmlspecialchars($img_src); ?>" alt="sys-snap" class="imh-footer-img" />
