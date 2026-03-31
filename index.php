@@ -280,24 +280,117 @@ function backup_is_date_dir_name($name)
  * Discover common backup directory paths on the system.
  * Returns array of existing backup directories.
  */
-function backup_discover_paths()
+/**
+ * Attempt to obtain WHM's configured "Default Backup Directory".
+ *
+ * This uses whmapi1 (local CLI) when available.
+ * Returns a normalized absolute path (no trailing slash), or null.
+ */
+function backup_cpanel_get_default_backupdir()
 {
-    $candidates = array('/backup', '/newbackup');
-
-    // Add numbered variants: /backup1-5, /newbackup1-5
-    for ($i = 1; $i <= 5; $i++) {
-        $candidates[] = '/backup' . $i;
-        $candidates[] = '/newbackup' . $i;
-    }
-
-    $found = array();
-    foreach ($candidates as $path) {
-        if (is_dir($path)) {
-            $found[] = $path;
+    // Prefer the on-disk binary path (more reliable than PATH).
+    $bin = null;
+    if (is_file('/usr/local/cpanel/bin/whmapi1')) {
+        $bin = '/usr/local/cpanel/bin/whmapi1';
+    } elseif (is_file('/usr/sbin/whmapi1')) {
+        $bin = '/usr/sbin/whmapi1';
+    } else {
+        $which = @shell_exec('command -v whmapi1 2>/dev/null');
+        if (is_string($which) && trim($which) !== '') {
+            $bin = trim($which);
         }
     }
 
-    return $found;
+    $j = null;
+
+    // Primary: whmapi1
+    if ($bin) {
+        $res = backup_exec_with_timeout(escapeshellarg($bin) . ' --output=json backup_config_get', 6);
+        if (is_array($res) && !empty($res['stdout'])) {
+            $decoded = @json_decode((string)$res['stdout'], true);
+            if (is_array($decoded)) {
+                $j = $decoded;
+            }
+        }
+    }
+
+    // Fallback: read WHM backup config file directly.
+    // Note: This is best-effort parsing and may vary by cPanel version.
+    if (!is_array($j) && is_file('/var/cpanel/backups/config')) {
+        $raw = @file_get_contents('/var/cpanel/backups/config');
+        if (is_string($raw) && $raw !== '') {
+            // Try to extract backupdir from key/value style files.
+            if (preg_match('/^\s*(?:BACKUPDIR|backupdir)\s*[:=]\s*(\S+)\s*$/mi', $raw, $m)) {
+                $j = array('data' => array('backup_config' => array('backupdir' => $m[1])));
+            }
+        }
+    }
+
+    if (!is_array($j)) return null;
+
+    $dir = null;
+    if (isset($j['data']['backup_config']['backupdir'])) {
+        $dir = $j['data']['backup_config']['backupdir'];
+    } elseif (isset($j['data']['backupdir'])) {
+        $dir = $j['data']['backupdir'];
+    } elseif (isset($j['backupdir'])) {
+        $dir = $j['backupdir'];
+    }
+
+    if (!is_string($dir)) return null;
+    $dir = trim($dir);
+    if ($dir === '' || $dir[0] !== '/') return null;
+
+    // Normalize (but keep root as-is)
+    $dir = ($dir === '/') ? '/' : rtrim($dir, '/');
+
+    return $dir;
+}
+
+/**
+ * Discover common backup directory paths on the system.
+ * Returns array of existing backup directories.
+ */
+function backup_discover_paths()
+{
+    $candidates = array();
+
+    // If this is a cPanel server, try WHM backup configuration first.
+    $looksLikeCpanel = (is_dir('/usr/local/cpanel') || is_dir('/var/cpanel') || is_dir('/etc/cpanel'));
+    if ($looksLikeCpanel) {
+        $whmDir = backup_cpanel_get_default_backupdir();
+        if (is_string($whmDir) && $whmDir !== '') {
+            $candidates[] = array('path' => $whmDir, 'source' => 'whm');
+        }
+    }
+
+    // Always include common locations (and /backup for legacy leftovers).
+    $candidates[] = array('path' => '/backup', 'source' => 'common');
+    $candidates[] = array('path' => '/newbackup', 'source' => 'common');
+
+    // Add numbered variants: /backup1-5, /newbackup1-5
+    for ($i = 1; $i <= 5; $i++) {
+        $candidates[] = array('path' => '/backup' . $i, 'source' => 'common');
+        $candidates[] = array('path' => '/newbackup' . $i, 'source' => 'common');
+    }
+
+    // De-dupe while preserving order. Include missing dirs (so WHM-configured dir shows even if absent).
+    $seen = array();
+    $out = array();
+    foreach ($candidates as $row) {
+        if (!is_array($row) || !isset($row['path'])) continue;
+        $path = (string)$row['path'];
+        if ($path === '' || isset($seen[$path])) continue;
+        $seen[$path] = 1;
+
+        $out[] = array(
+            'path'   => $path,
+            'exists' => is_dir($path),
+            'source' => isset($row['source']) ? (string)$row['source'] : 'unknown',
+        );
+    }
+
+    return $out;
 }
 
 /**
@@ -1195,16 +1288,42 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
     ?>
         <div class="backup-found-line">
             <strong>Discovered:</strong>
-            <?php foreach ($discoveredPaths as $path): ?>
+            <?php foreach ($discoveredPaths as $row): ?>
+                <?php
+                    $path = is_array($row) && isset($row['path']) ? (string)$row['path'] : '';
+                    $exists = is_array($row) && isset($row['exists']) ? (bool)$row['exists'] : false;
+                    $source = is_array($row) && isset($row['source']) ? (string)$row['source'] : '';
+
+                    $sourceLabel = ($source === 'whm') ? 'WHM Default Backup Directory' : 'Common location';
+
+                    $label = $path;
+                    if (!$exists) {
+                        $label .= ' (missing)';
+                    } elseif ($source === 'whm') {
+                        $label .= ' (WHM)';
+                    }
+
+                    $title = $sourceLabel . ': ' . $path;
+                    if (!$exists) {
+                        $title .= ' (does not exist on disk)';
+                    }
+                ?>
+
+                <?php if ($path === '') continue; ?>
+
                 <?php if ($path === $scanRoot): ?>
-                    <span class="backup-path-link active" title="Currently viewing <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
-                        <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>
+                    <span class="backup-path-link active" title="<?php echo htmlspecialchars($title, ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php echo htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>
+                    </span>
+                <?php elseif (!$exists): ?>
+                    <span class="backup-path-link" style="opacity:0.55; cursor:not-allowed;" title="<?php echo htmlspecialchars($title, ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php echo htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>
                     </span>
                 <?php else: ?>
                     <a href="<?php echo $linkPrefix; ?>scan_root=<?php echo urlencode($path); ?>&amp;sort=<?php echo urlencode($sort); ?>&amp;type_filter=<?php echo urlencode($type_filter); ?>"
                         class="backup-path-link"
-                        title="Scan <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>">
-                        <?php echo htmlspecialchars($path, ENT_QUOTES, 'UTF-8'); ?>
+                        title="<?php echo htmlspecialchars('Scan ' . $path . ' — ' . $sourceLabel, ENT_QUOTES, 'UTF-8'); ?>">
+                        <?php echo htmlspecialchars($label, ENT_QUOTES, 'UTF-8'); ?>
                     </a>
                 <?php endif; ?>
             <?php endforeach; ?>
