@@ -366,13 +366,15 @@ function backup_discover_paths()
 
     // Always include common locations (and /backup for legacy leftovers).
     $candidates[] = array('path' => '/backup', 'source' => 'common');
-    $candidates[] = array('path' => '/newbackup', 'source' => 'common');
+    if (!$looksLikeCpanel) {
+        $candidates[] = array('path' => '/newbackup', 'source' => 'common');
+    }
 
     // Add numbered variants: /backup1-5, /newbackup1-5
-    for ($i = 1; $i <= 5; $i++) {
+    /*     for ($i = 1; $i <= 5; $i++) {
         $candidates[] = array('path' => '/backup' . $i, 'source' => 'common');
         $candidates[] = array('path' => '/newbackup' . $i, 'source' => 'common');
-    }
+    } */
 
     // De-dupe while preserving order. Include missing dirs (so WHM-configured dir shows even if absent).
     $seen = array();
@@ -1611,16 +1613,14 @@ $chartData = array(
 <script>
     window.backupChartData = <?php echo json_encode($chartData); ?>;
 </script>
-
-<div class="imh-box">
-    <h3>Backups by Type</h3>
-    <div class="imh-charts-grid" id="BackupTypeCharts"></div>
-</div>
 <div class="imh-box">
     <h3>Disk Usage</h3>
     <div class="imh-charts-grid" id="DiskUsageCharts"></div>
 </div>
-
+<div class="imh-box">
+    <h3>Backups by Type</h3>
+    <div class="imh-charts-grid" id="BackupTypeCharts"></div>
+</div>
 <div class="imh-footer-box">
     <img src="<?php echo htmlspecialchars($img_src); ?>" alt="sys-snap" class="imh-footer-img" />
     <p>Plugin by <a href="https://inmotionhosting.com" target="_blank">InMotion Hosting</a>.</p>
