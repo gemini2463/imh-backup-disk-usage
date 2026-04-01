@@ -1,5 +1,5 @@
 <?php
-// Backup Disk Usage
+//Backup Disk Usage
 
 /**
  * Backup Disk Usage (imh-backup-disk-usage)
@@ -10,7 +10,7 @@
  *   - CWP:       /usr/local/cwpsrv/htdocs/resources/admin/modules/imh-snap-stat.php
  *
  * Maintainer: InMotion Hosting
- * Version: 0.1.0
+ * Version: 0.1.1
  *
  * Notes:
  * - PHP 7.1 compatible (no match/arrow functions/nullsafe)
@@ -1290,23 +1290,23 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
             <strong>Discovered:</strong>
             <?php foreach ($discoveredPaths as $row): ?>
                 <?php
-                    $path = is_array($row) && isset($row['path']) ? (string)$row['path'] : '';
-                    $exists = is_array($row) && isset($row['exists']) ? (bool)$row['exists'] : false;
-                    $source = is_array($row) && isset($row['source']) ? (string)$row['source'] : '';
+                $path = is_array($row) && isset($row['path']) ? (string)$row['path'] : '';
+                $exists = is_array($row) && isset($row['exists']) ? (bool)$row['exists'] : false;
+                $source = is_array($row) && isset($row['source']) ? (string)$row['source'] : '';
 
-                    $sourceLabel = ($source === 'whm') ? 'WHM Default Backup Directory' : 'Common location';
+                $sourceLabel = ($source === 'whm') ? 'WHM Default Backup Directory' : 'Common location';
 
-                    $label = $path;
-                    if (!$exists) {
-                        $label .= ' (missing)';
-                    } elseif ($source === 'whm') {
-                        $label .= ' (WHM)';
-                    }
+                $label = $path;
+                if (!$exists) {
+                    $label .= ' (missing)';
+                } elseif ($source === 'whm') {
+                    $label .= ' (WHM)';
+                }
 
-                    $title = $sourceLabel . ': ' . $path;
-                    if (!$exists) {
-                        $title .= ' (does not exist on disk)';
-                    }
+                $title = $sourceLabel . ': ' . $path;
+                if (!$exists) {
+                    $title .= ' (does not exist on disk)';
+                }
                 ?>
 
                 <?php if ($path === '') continue; ?>
