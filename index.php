@@ -10,7 +10,7 @@
  *   - CWP:       /usr/local/cwpsrv/htdocs/resources/admin/modules/imh-snap-stat.php
  *
  * Maintainer: InMotion Hosting
- * Version: 0.1.1
+ * Version: 0.1.2
  *
  * Notes:
  * - PHP 7.1 compatible (no match/arrow functions/nullsafe)
@@ -1253,8 +1253,8 @@ $img_src = $imh_isCPanelServer ? 'imh-backup-disk-usage.png' : 'design/img/imh-b
 
 <div class="imh-box">
     <p>This tool provides a visual representation of your server's disk usage, specifically highlighting the impact of backup files.</p>
-    <p><strong>Backups by Type:</strong> Shows the total size consumed by each backup type.</p>
     <p><strong>Disk Usage:</strong> Displays the overall disk usage for each disk. This helps you visualize how much space is taken by backups ("Daily", "Weekly", etc.) versus other data ("Other") and free space.</p>
+    <p><strong>Backups by Type:</strong> Shows the total size consumed by each backup type.</p>
     <p>To manage your backup settings and retention policies, please visit
         <?php if ($imh_isCPanelServer): ?>
             <a href="../../scripts/backup_configuration/settings" target="_blank">Backup Configuration</a>.

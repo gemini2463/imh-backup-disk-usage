@@ -1,4 +1,4 @@
-# Backup Disk Usage (imh-backup-disk-usage), v0.1.1
+# Backup Disk Usage (imh-backup-disk-usage), v0.1.2
 
 WHM/CWP plugin to monitor /backup disk usage (monthly/weekly/daily archives in /backup).
 
